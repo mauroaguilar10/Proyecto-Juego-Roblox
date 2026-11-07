@@ -4,7 +4,8 @@
 	Owner: Dev A (Combat).
 
 	El arma es una Tool de inventario (ver WeaponVisualService). Con ella en la mano:
-	  - Atacar:   Tool.Activated (click izquierdo / toque / R2) → CombatAttack("Attack")
+	  - Atacar:   Tool.Activated (click izquierdo / toque / R2) → CombatAttack("Attack", aim)
+	              (gira al personaje hacia el cursor/toque, o la cámara con gamepad)
 	  - Bloquear: mantener F / L2 / botón táctil              → CombatAttack("Block", true/false)
 	  - Esquivar: Q / L1 / botón táctil                        → CombatAttack("Dash")
 	Cooldowns, combo y aguante se predicen en el cliente solo para responder al instante;
@@ -17,6 +18,7 @@
 local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local WeaponData = require(Shared:WaitForChild("WeaponData"))
@@ -74,6 +76,30 @@ local function getWeapon(): WeaponData.WeaponStats
 	return WeaponData.GetOrDefault(if typeof(equipped) == "string" then equipped else nil)
 end
 
+-- Dirección horizontal hacia donde apunta el jugador: el punto del piso bajo el cursor/toque
+-- (a la altura del personaje); con gamepad, hacia donde mira la cámara.
+local function getAimDirection(root: BasePart): Vector3?
+	local camera = workspace.CurrentCamera
+	if not camera then
+		return nil
+	end
+	local direction: Vector3
+	if UserInputService:GetLastInputType().Name:find("Gamepad") then
+		direction = camera.CFrame.LookVector
+	else
+		local mouse = UserInputService:GetMouseLocation()
+		local ray = camera:ViewportPointToRay(mouse.X, mouse.Y)
+		if math.abs(ray.Direction.Y) > 1e-3 then
+			local t = (root.Position.Y - ray.Origin.Y) / ray.Direction.Y
+			direction = if t > 0 then ray.Origin + ray.Direction * t - root.Position else ray.Direction
+		else
+			direction = ray.Direction
+		end
+	end
+	local flat = Vector3.new(direction.X, 0, direction.Z)
+	return if flat.Magnitude > 0.1 then flat.Unit else nil
+end
+
 -- ── Acciones ──
 
 local function attack(attackEvent: RemoteEvent)
@@ -90,7 +116,12 @@ local function attack(attackEvent: RemoteEvent)
 	combo = if now - lastAttackAt <= weapon.AttackCooldown + COMBO_WINDOW then combo % COMBO_LENGTH + 1 else 1
 	lastAttackAt = now
 
-	attackEvent:FireServer("Attack")
+	local aim = getAimDirection(root)
+	if aim then
+		-- Girar al personaje hacia el golpe para que lo que se ve coincida con lo que valida el servidor.
+		root.CFrame = CFrame.lookAt(root.Position, root.Position + aim)
+	end
+	attackEvent:FireServer("Attack", aim)
 	CombatAnimations.PlaySwing(character, combo)
 	CombatEffects.PlaySound(if combo == COMBO_LENGTH then "Heavy" else "Swing", root)
 end
