@@ -1,10 +1,11 @@
 --!strict
 local Players = game:GetService("Players")
 local MarketplaceService = game:GetService("MarketplaceService")
-local Shared = game:GetService("ReplicatedStorage").Shared
-local Remotes = require(Shared.Remotes)
-local WeaponData = require(Shared.WeaponData)
-local Data = require(script.Parent.DataService)
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Remotes = require(Shared:WaitForChild("Remotes"))
+local WeaponData = require(Shared:WaitForChild("WeaponData"))
+local Data = require(script.Parent:WaitForChild("DataService"))
 local ShopService = {}
 local lastAction: {[Player]: number} = {}
 local busy: {[Player]: boolean} = {}
