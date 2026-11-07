@@ -163,21 +163,23 @@ local function dungeonPanel(gui: ScreenGui)
 	title.TextXAlignment, detail.TextXAlignment = Enum.TextXAlignment.Center, Enum.TextXAlignment.Center
 
 	task.spawn(function()
-		local dungeon = workspace:WaitForChild("Mazmorra")
+		local mazmorra = workspace:WaitForChild("Mazmorra")
 		local player = Players.LocalPlayer
+		local roomName = `Sala_{player.UserId}` -- cada jugador tiene su propia sala (DungeonService)
 		while true do
-			local center = dungeon:GetAttribute("Center")
-			local size = dungeon:GetAttribute("Size")
+			local dungeon = mazmorra:FindFirstChild(roomName)
+			local center = if dungeon then dungeon:GetAttribute("Center") else nil
+			local size = if dungeon then dungeon:GetAttribute("Size") else nil
 			local char = player.Character
 			local root = if char then char:FindFirstChild("HumanoidRootPart") else nil
 			local inside = false
-			if typeof(center) == "Vector3" and typeof(size) == "number" and root and root:IsA("BasePart") then
+			if dungeon and typeof(center) == "Vector3" and typeof(size) == "number" and root and root:IsA("BasePart") then
 				local offset = root.Position - center
 				inside = math.abs(offset.X) <= size / 2 and math.abs(offset.Z) <= size / 2 and offset.Y > -5 and offset.Y < 25
 			end
 			box.Visible = inside
 			setDungeonLighting(inside)
-			if inside then
+			if inside and dungeon then
 				local wave = dungeon:GetAttribute("Wave")
 				local left = dungeon:GetAttribute("EnemiesLeft")
 				local nextAt = dungeon:GetAttribute("NextWaveAt")
