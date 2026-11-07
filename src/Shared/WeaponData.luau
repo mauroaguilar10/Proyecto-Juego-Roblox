@@ -45,7 +45,7 @@ local Weapons: { [string]: WeaponStats } = {
 		Range = 7,
 		Acquisition = "Gold",
 		Price = 500,
-		DropChance = 0.05,
+		DropChance = 0, -- sin drops: las armas solo se compran en la tienda
 		GamePassId = nil,
 	},
 

@@ -163,7 +163,7 @@ local function onEnemyDied(enemy: Enemy, token: number)
 			end
 		end
 	end
-	-- La recompensa por baja va última: si hay botín, ese mensaje es el que queda en pantalla.
+	-- Oro por la baja (solo para quien dio el último golpe).
 	reward(enemy.humanoid, enemy.stats.gold)
 
 	if not waveCleared then return end

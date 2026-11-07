@@ -4,7 +4,8 @@
 	Owner: Dev A (Combat).
 
 	- El arma es una Tool de inventario (ver WeaponVisualService). Con ella en la mano,
-	  Tool.Activated (click izquierdo / toque / R2) → Remotes "CombatAttack".
+	  Tool.Activated (click izquierdo / toque / R2) → Remotes "CombatAttack"(aim), girando al
+	  personaje hacia el cursor/toque (o la cámara con gamepad).
 	- Cooldown predicho en cliente solo para no spamear; el servidor es quien valida.
 	- Remotes "CombatFeedback" → destello rojo sobre el objetivo golpeado.
 ]]
@@ -13,6 +14,7 @@ local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local WeaponData = require(Shared:WaitForChild("WeaponData"))
@@ -119,6 +121,30 @@ local function flashTarget(target: Model)
 	Debris:AddItem(highlight, HIT_FLASH_DURATION)
 end
 
+-- Dirección horizontal hacia donde apunta el jugador: el punto del piso bajo el cursor/toque
+-- (a la altura del personaje); con gamepad, hacia donde mira la cámara.
+local function getAimDirection(root: BasePart): Vector3?
+	local camera = workspace.CurrentCamera
+	if not camera then
+		return nil
+	end
+	local direction: Vector3
+	if UserInputService:GetLastInputType().Name:find("Gamepad") then
+		direction = camera.CFrame.LookVector
+	else
+		local mouse = UserInputService:GetMouseLocation()
+		local ray = camera:ViewportPointToRay(mouse.X, mouse.Y)
+		if math.abs(ray.Direction.Y) > 1e-3 then
+			local t = (root.Position.Y - ray.Origin.Y) / ray.Direction.Y
+			direction = if t > 0 then ray.Origin + ray.Direction * t - root.Position else ray.Direction
+		else
+			direction = ray.Direction
+		end
+	end
+	local flat = Vector3.new(direction.X, 0, direction.Z)
+	return if flat.Magnitude > 0.1 then flat.Unit else nil
+end
+
 -- Conecta Activated de la Tool del arma (Attribute "WeaponId") una sola vez por Tool.
 local function hookWeaponTool(child: Instance, attackEvent: RemoteEvent)
 	if not child:IsA("Tool") or child:GetAttribute("WeaponId") == nil or hookedTools[child] then
@@ -131,7 +157,14 @@ local function hookWeaponTool(child: Instance, attackEvent: RemoteEvent)
 			return
 		end
 		lastAttackAt = os.clock()
-		attackEvent:FireServer()
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		local root = if humanoid then humanoid.RootPart else nil
+		local aim = if root then getAimDirection(root) else nil
+		if root and aim then
+			-- Girar al personaje hacia el golpe para que lo que se ve coincida con lo que valida el servidor.
+			root.CFrame = CFrame.lookAt(root.Position, root.Position + aim)
+		end
+		attackEvent:FireServer(aim)
 		playSwing(character)
 	end)
 end

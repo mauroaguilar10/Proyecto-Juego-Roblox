@@ -4,7 +4,8 @@
 	Owner: Dev A (Combat).
 
 	Flujo:
-	  Cliente → Remotes "CombatAttack" (sin argumentos; el servidor no confía en datos del cliente)
+	  Cliente → Remotes "CombatAttack"(aim: Vector3) — solo la dirección hacia donde apunta;
+	  daño, alcance y cooldown los decide el servidor (aim inválido → se usa hacia donde mira el personaje)
 	  Servidor valida (vivo, estado, cooldown del arma) → busca objetivos en un arco frontal
 	  → aplica daño → Remotes "CombatFeedback" al atacante y a la víctima (si es jugador).
 
@@ -45,8 +46,9 @@ local ATTACK_STATE_DURATION = 0.25 -- s que el atacante queda en "Attacking"
 local HIT_STUN_DURATION = 0.3 -- s que la víctima queda en "Stunned"
 local HIT_ARC_DOT = math.cos(math.rad(70)) -- arco frontal de 140°
 local RANGE_TOLERANCE = 1.5 -- studs extra para compensar latencia
-local COOLDOWN_TOLERANCE = 0.9 -- acepta ataques un 10% antes (jitter de red)
+local COOLDOWN_TOLERANCE = 0.8 -- acepta ataques un 20% antes (jitter de red)
 local MAX_TARGETS = 5
+local POINT_BLANK = 3 -- studs: a esta distancia no se exige el arco frontal
 
 -- ── Estado interno ──
 local lastAttackAt: { [Player]: number } = {}
@@ -137,40 +139,53 @@ local function canDamage(attacker: Player, targetModel: Model): boolean
 	return attacker:GetAttribute("InDuel") ~= true
 end
 
-local function findTargets(attackerCharacter: Model, root: BasePart, range: number): { HitTarget }
+-- Dirección de ataque: la que manda el cliente (hacia donde apunta) o, si no es válida,
+-- hacia donde mira el personaje. Confiar en ella no da ventaja: el cliente ya controla
+-- la rotación de su propio personaje; el alcance y el cooldown se siguen validando aquí.
+local function attackDirection(root: BasePart, aim: any): Vector3
+	if typeof(aim) == "Vector3" then
+		local flat = Vector3.new(aim.X, 0, aim.Z)
+		local magnitude = flat.Magnitude
+		if magnitude == magnitude and magnitude > 0.1 and magnitude < math.huge then
+			return flat.Unit
+		end
+	end
+	local look = root.CFrame.LookVector
+	return Vector3.new(look.X, 0, look.Z).Unit
+end
+
+local function findTargets(attackerCharacter: Model, root: BasePart, range: number, flatLook: Vector3): { HitTarget }
 	local maxDistance = range + RANGE_TOLERANCE
 
 	local params = OverlapParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	params.FilterDescendantsInstances = { attackerCharacter }
 
-	local look = root.CFrame.LookVector
-	local flatLook = Vector3.new(look.X, 0, look.Z).Unit
-
-	local seen: { [Humanoid]: boolean } = {}
-	local results: { HitTarget } = {}
-
+	-- Por cada Humanoid, la parte más cercana: los enemigos grandes se golpean por el borde,
+	-- no solo por el centro del HumanoidRootPart.
+	local closest: { [Humanoid]: Vector3 } = {}
 	for _, part in workspace:GetPartBoundsInRadius(root.Position, maxDistance, params) do
 		local model = part:FindFirstAncestorOfClass("Model")
 		local humanoid = if model then model:FindFirstChildOfClass("Humanoid") else nil
-		if not humanoid or seen[humanoid] or humanoid.Health <= 0 then
+		if not humanoid or humanoid.Health <= 0 or not humanoid.RootPart then
 			continue
 		end
-		seen[humanoid] = true
-
-		local targetRoot = humanoid.RootPart
-		if not targetRoot then
-			continue
+		local offset = part.Position - root.Position
+		local best = closest[humanoid]
+		if not best or offset.Magnitude < best.Magnitude then
+			closest[humanoid] = offset
 		end
+	end
 
-		local offset = targetRoot.Position - root.Position
+	local results: { HitTarget } = {}
+	for humanoid, offset in closest do
 		local distance = offset.Magnitude
 		if distance > maxDistance then
 			continue
 		end
 
 		local flatOffset = Vector3.new(offset.X, 0, offset.Z)
-		if flatOffset.Magnitude > 0.5 and flatLook:Dot(flatOffset.Unit) < HIT_ARC_DOT then
+		if flatOffset.Magnitude > POINT_BLANK and flatLook:Dot(flatOffset.Unit) < HIT_ARC_DOT then
 			continue
 		end
 
@@ -186,7 +201,7 @@ end
 
 -- ── Ataque ──
 
-local function onAttackRequested(player: Player)
+local function onAttackRequested(player: Player, aim: any)
 	local character, humanoid, root = getAliveCharacter(player)
 	if not character or not humanoid or not root then
 		return
@@ -216,7 +231,7 @@ local function onAttackRequested(player: Player)
 	local feedbackEvent = Remotes.GetEvent("CombatFeedback")
 	local hits = 0
 
-	for _, target in findTargets(character, root, weapon.Range) do
+	for _, target in findTargets(character, root, weapon.Range, attackDirection(root, aim)) do
 		if hits >= MAX_TARGETS then
 			break
 		end
