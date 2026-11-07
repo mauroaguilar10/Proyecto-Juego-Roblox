@@ -37,6 +37,7 @@ local TweenService = game:GetService("TweenService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local Data = require(script.Parent:WaitForChild("DataService"))
+local Sounds = require(script.Parent:WaitForChild("Util"):WaitForChild("Sounds"))
 local DungeonService = {}
 local random = Random.new()
 
@@ -165,6 +166,12 @@ local function torch(parent: Instance, position: Vector3, facing: Vector3)
 	light.Color = Color3.fromRGB(255, 160, 80)
 	light.Range, light.Brightness = 22, 2.2
 	light.Parent = flame
+	Sounds.Torch(flame)
+end
+
+-- Tono según el tamaño: los grandes suenan más graves.
+local function pitchFor(kind: Kind): number
+	return 1.15 - 0.2 * kind.scale
 end
 
 local function inArena(position: Vector3): boolean
@@ -219,6 +226,7 @@ local function crumble(enemy: Enemy)
 	local parent = folder
 	if not parent then return end
 	local scale = enemy.kind.scale
+	Sounds.PlayAt("Piedras", enemy.torso.Position, pitchFor(enemy.kind), math.min(1.5, 0.7 + 0.3 * scale))
 	for _, piece in enemy.model:GetDescendants() do
 		if not piece:IsA("BasePart") or piece.Transparency >= 1 then continue end
 		piece.Transparency = 1
@@ -257,6 +265,7 @@ local function onEnemyDied(enemy: Enemy, token: number)
 
 	local waveCleared = token == waveToken and #enemies == 0
 	if waveCleared then
+		Sounds.PlayAt("OleadaSuperada", center + Vector3.new(0, 6, 0))
 		local bonus = 10 * wave
 		for _, player in playersInArena() do
 			if Data.Profile(player) and Data.ChangeGold(player, bonus) then
@@ -374,6 +383,8 @@ local function hitPlayer(target: Humanoid, amount: number)
 	local before = target.Health
 	target:TakeDamage(amount)
 	if target.Health < before then
+		local root = target.RootPart
+		if root then Sounds.Play("GolpeRecibido", root, 0.9 + math.random() * 0.2) end
 		Remotes.GetEvent("CombatFeedback"):FireClient(victim, {
 			Target = target.Parent, Damage = before - target.Health, Killed = target.Health <= 0,
 		})
@@ -385,6 +396,7 @@ local function attack(enemy: Enemy, target: Humanoid, targetRoot: BasePart)
 	enemy.nextAttack = os.clock() + enemy.kind.cooldown
 	local original = enemy.torso.Color
 	enemy.torso.Color = WARN_COLOR
+	Sounds.Play("AvisoGolpe", enemy.torso, pitchFor(enemy.kind))
 	task.delay(ATTACK_WINDUP, function()
 		enemy.attacking = false
 		if enemy.torso.Parent then enemy.torso.Color = original end
@@ -416,12 +428,14 @@ local function slam(enemy: Enemy)
 	}):Play()
 	local original = enemy.torso.Color
 	enemy.torso.Color = SLAM_COLOR
+	Sounds.Play("JefeCarga", enemy.torso)
 
 	task.delay(SLAM_WINDUP, function()
 		enemy.attacking = false
 		if enemy.torso.Parent then enemy.torso.Color = original end
 		warning:Destroy()
 		if enemy.humanoid.Health <= 0 then return end
+		Sounds.PlayAt("JefeGolpe", at + Vector3.new(0, 1, 0))
 		for _, player in playersInArena() do
 			local hum = (player.Character :: Model):FindFirstChildOfClass("Humanoid") :: Humanoid
 			local root = hum.RootPart :: BasePart
@@ -513,7 +527,9 @@ local function portal(parent: Instance, name: string, cf: CFrame, target: Vector
 			Remotes.GetEvent("Notify"):FireClient(player, "Entrada bloqueada durante un duelo o mientras se carga tu inventario.")
 			return
 		end
+		Sounds.PlayAt("Portal", veil.Position) -- se escucha donde desaparece…
 		char:PivotTo(CFrame.new(target))
+		Sounds.Play("Portal", root, 1.1) -- …y donde aparece
 		if entering then
 			Remotes.GetEvent("Notify"):FireClient(player, `Oleada {wave} en curso`)
 			recordWave(player)
@@ -613,6 +629,7 @@ function DungeonService:Init()
 			spawnEnemy(dungeon, x, z, kind, base, waveToken)
 		end
 		publish({ Wave = number, EnemiesLeft = #enemies, NextWaveAt = 0 })
+		Sounds.PlayAt(if number % BOSS_EVERY == 0 then "JefeAparece" else "Oleada", center + Vector3.new(0, 6, 0))
 		if number % BOSS_EVERY == 0 then
 			notifyArena(`¡Oleada {number}: aparece el {KINDS.Boss.name}! Cuidado con su golpe en área.`)
 		else

@@ -9,6 +9,7 @@ local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
 local Remotes = require(Shared:WaitForChild("Remotes") :: ModuleScript)
 local WeaponData = require(Shared:WaitForChild("WeaponData") :: ModuleScript)
 local Preview = require(script.Parent:WaitForChild("Util"):WaitForChild("WeaponPreview"))
+local Sounds = require(script.Parent:WaitForChild("Util"):WaitForChild("Sounds"))
 local UIController = {}
 
 local ink = Color3.fromRGB(15, 19, 26)
@@ -125,6 +126,7 @@ local savedLight: { [string]: any }? = nil
 local function setDungeonLighting(on: boolean)
 	local info = TweenInfo.new(0.8, Enum.EasingStyle.Sine)
 	local tint = Lighting:FindFirstChild("TonoMazmorra")
+	if on ~= (savedLight ~= nil) then Sounds.Ambient(on) end
 	if on and not savedLight then
 		local saved = {}
 		for property in DUNGEON_LIGHT do
@@ -326,6 +328,7 @@ function UIController:Init()
 		TweenService:Create(billboard, rise, { StudsOffsetWorldSpace = Vector3.new(0, 3, 0) }):Play()
 		TweenService:Create(text, rise, { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
 		Debris:AddItem(anchor, 1.2)
+		Sounds.Play("Moneda", 0.95 + math.random() * 0.13)
 
 		local camera = workspace.CurrentCamera
 		if not camera or not goldBox.Visible then return end
@@ -436,6 +439,7 @@ function UIController:Init()
 			local ok, bought, reason = pcall(function()
 				return Remotes.GetFunction("PurchaseWeapon"):InvokeServer(id)
 			end)
+			if ok and bought then Sounds.Play("Compra") end
 			if ok and not bought and w.Acquisition == "GamePass" and reason == "Se necesita el pase de esta arma." and w.GamePassId then
 				Marketplace:PromptGamePassPurchase(player, w.GamePassId)
 			else
@@ -460,6 +464,7 @@ function UIController:Init()
 		toggle.Visible = not open
 		if hudGold.Parent and hudGold.Parent:IsA("GuiObject") then hudGold.Parent.Visible = not open end
 		if open then
+			Sounds.Play("Tienda")
 			resize()
 			render()
 			refresh()
@@ -491,6 +496,7 @@ function UIController:Init()
 		if prompt:GetAttribute("OpenShop") == true then show(true) end
 	end)
 	render()
+	Sounds.Preload()
 	gui.Parent = player:WaitForChild("PlayerGui")
 end
 
