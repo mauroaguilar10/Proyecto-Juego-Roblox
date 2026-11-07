@@ -46,6 +46,23 @@ El **escritor** es el único que puede hacer `SetAttribute`. Los demás solo lee
 | `Stamina`        | `Humanoid` de jugadores                 | `number`  | `0..100` (aguante para bloquear y esquivar)       | `CombatService` (A)          | `CombatController`, `HealthBarController` |
 | `Blocking`       | `Humanoid` de jugadores                 | `boolean` | `true` mientras bloquea                           | `CombatService` (A)          | `CombatController` |
 | `ComboStep`      | `Humanoid` de jugadores                 | `number`  | `1..3`, golpe del combo en curso (0 = ninguno)    | `CombatService` (A)          | `CombatController` |
+| `Wave`           | `workspace.Mazmorra`                    | `number`  | oleada actual (0 = todavía ninguna)               | `DungeonService` (B)         | `UIController` |
+| `EnemiesLeft`    | `workspace.Mazmorra`                    | `number`  | guardianes vivos de la oleada                     | `DungeonService` (B)         | `UIController` |
+| `NextWaveAt`     | `workspace.Mazmorra`                    | `number`  | `workspace:GetServerTimeNow()` de la próxima oleada (0 = ninguna pendiente) | `DungeonService` (B) | `UIController` |
+| `Center` / `Size`| `workspace.Mazmorra`                    | `Vector3` / `number` | centro y lado de la sala (para saber si el jugador está adentro) | `DungeonService` (B) | `UIController` |
+
+**Progreso guardado (DataService, B):** `bestWave` (mejor oleada alcanzada) y `kills` (guardianes
+derrotados) se guardan en el perfil y se muestran en `Player.leaderstats` ("Mejor oleada", "Guardianes").
+`RecordsService` publica la mejor oleada en el OrderedDataStore `BestWave_v1` y la muestra en el
+cartel de récords del lobby. Las armas de GamePass se vuelven a verificar cada vez que el jugador entra.
+
+**Avisos de Economía (`Notify`, S→C):** además de texto, `DungeonService` manda
+`{ Kind = "Gold", Amount: number, Position: Vector3 }` al jugador que mató a un guardián;
+`UIController` muestra el «+N» en el mundo y las monedas volando al contador.
+
+**Lobby (B):** `LobbyService` arma el puesto de la tienda; su `ProximityPrompt` tiene el Attribute
+`OpenShop = true` y `UIController` abre la tienda al activarlo (sin pasar por el servidor).
+`DungeonService` arma el arco de entrada a la mazmorra y `RecordsService` el cartel de récords.
 
 **Garantías**
 
