@@ -61,6 +61,18 @@ El **escritor** es el único que puede hacer `SetAttribute`. Los demás solo lee
 - **PvP** solo entre oponentes del mismo duelo (`ArenaService.AreOpponents`). Fuera de duelo
   los jugadores no se dañan entre sí; en duelo no se puede dañar a enemigos.
 
+**Remotes de duelo (para la UI de Economy)**
+
+`DuelController` (Combat) muestra notificaciones nativas mínimas. La UI definitiva puede
+escuchar los mismos eventos sin tocar Combat:
+
+- `DuelInvite` (S→C): `(challenger: Player)`. Responder con
+  `DuelResponse:FireServer(challenger, accepted: boolean)`.
+- `DuelStateChanged` (S→C): `payload` con
+  `State: "InviteSent" | "Declined" | "Countdown" | "Fight" | "End"`, `Opponent: Player?`,
+  `Seconds: number?` (Countdown), `Winner: Player?` (End; `nil` = empate) y
+  `Reason: "Defeat" | "Forfeit" | "Timeout"?` (End).
+
 ## 4. Contrato de módulos
 
 Todo `ModuleScript` dentro de `Combat/` o `Economy/` (servidor y cliente) **debe**
