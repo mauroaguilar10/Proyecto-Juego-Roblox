@@ -4,24 +4,41 @@
 	Owner: compartido (cambios solo vía PR revisado por ambos desarrolladores).
 
 	Lectores:
-	  - Combat  (CombatService / CombatController): Damage, Cooldown, Range.
-	  - Economy (ShopService / DungeonService / UIController): Acquisition, Price, DropChance, GamePassId.
+	  - Combat  (CombatService / CombatController): Damage, AttackCooldown, Range y las
+	    físicas del golpe (Weight, WindupTime, RecoveryTime, PostureDamage, StepForwardForce).
+	  - Economy (ShopService / DungeonService / UIController): Acquisition, Price, DropChance,
+	    GamePassId (y Damage / AttackCooldown / Range para mostrar estadísticas).
+
+	Ciclo de un ataque (ver CombatService):
+	  Windup (WindupTime) → Attacking (frame activo, ~0,1 s) → Recovery (RecoveryTime si falla;
+	  más corta si conecta). AttackCooldown es el mínimo entre dos inicios de ataque y debe ser
+	  ≥ WindupTime + 0,1.
 
 	El Attribute `Player.EquippedWeapon` SIEMPRE contiene una clave válida de `Weapons`.
 ]]
 
 export type AcquisitionType = "Free" | "Gold" | "GamePass"
 
+-- Light: rápida, poca inercia. Heavy: lenta, mucho compromiso, hyperarmor al final del windup.
+export type WeaponWeight = "Light" | "Medium" | "Heavy"
+
 export type WeaponStats = {
 	Id: string,
 	DisplayName: string,
 	Damage: number, -- daño por golpe
-	AttackCooldown: number, -- segundos entre ataques
+	AttackCooldown: number, -- segundos mínimos entre el inicio de dos ataques
 	Range: number, -- studs
 	Acquisition: AcquisitionType,
 	Price: number, -- oro (0 si no se compra con oro)
 	DropChance: number, -- 0..1, probabilidad de drop en mazmorra (0 = no dropea)
 	GamePassId: number?, -- solo si Acquisition == "GamePass"
+
+	-- Físicas del golpe
+	Weight: WeaponWeight, -- define cuánto se frena el jugador al atacar y si tiene hyperarmor
+	WindupTime: number, -- s desde el clic hasta que sale el hitbox
+	RecoveryTime: number, -- s de castigo si el golpe no conecta (whiff punish)
+	PostureDamage: number, -- postura que suma al rival que bloquea (0..100)
+	StepForwardForce: number, -- velocidad (studs/s) del paso hacia adelante en el frame activo
 }
 
 local Weapons: { [string]: WeaponStats } = {
@@ -35,6 +52,12 @@ local Weapons: { [string]: WeaponStats } = {
 		Price = 0,
 		DropChance = 0,
 		GamePassId = nil,
+
+		Weight = "Light",
+		WindupTime = 0.2,
+		RecoveryTime = 0.35,
+		PostureDamage = 16,
+		StepForwardForce = 14,
 	},
 
 	IronBlade = {
@@ -47,6 +70,12 @@ local Weapons: { [string]: WeaponStats } = {
 		Price = 500,
 		DropChance = 0, -- sin drops: las armas solo se compran en la tienda
 		GamePassId = nil,
+
+		Weight = "Medium",
+		WindupTime = 0.3,
+		RecoveryTime = 0.45,
+		PostureDamage = 24,
+		StepForwardForce = 18,
 	},
 
 	-- Armas detalladas (modelo en Shared/WeaponArt).
@@ -60,6 +89,12 @@ local Weapons: { [string]: WeaponStats } = {
 		Price = 1500,
 		DropChance = 0,
 		GamePassId = nil,
+
+		Weight = "Medium",
+		WindupTime = 0.28,
+		RecoveryTime = 0.42,
+		PostureDamage = 22,
+		StepForwardForce = 17,
 	},
 
 	DawnSpear = {
@@ -72,6 +107,13 @@ local Weapons: { [string]: WeaponStats } = {
 		Price = 3000,
 		DropChance = 0,
 		GamePassId = nil,
+
+		-- Lanza: ataque rápido y de lejos, poca presión sobre la guardia.
+		Weight = "Light",
+		WindupTime = 0.22,
+		RecoveryTime = 0.38,
+		PostureDamage = 18,
+		StepForwardForce = 20,
 	},
 
 	ColossusAxe = {
@@ -84,6 +126,13 @@ local Weapons: { [string]: WeaponStats } = {
 		Price = 6000,
 		DropChance = 0,
 		GamePassId = nil,
+
+		-- Hacha: golpe lento y muy pesado; rompe guardias y tiene hyperarmor.
+		Weight = "Heavy",
+		WindupTime = 0.5,
+		RecoveryTime = 0.65,
+		PostureDamage = 40,
+		StepForwardForce = 26,
 	},
 
 	-- Arma del Pase del Vacío (el pase además duplica el oro de la mazmorra: ver DataService).
@@ -97,6 +146,12 @@ local Weapons: { [string]: WeaponStats } = {
 		Price = 0,
 		DropChance = 0,
 		GamePassId = 2075385839, -- "Void pass" en Roblox
+
+		Weight = "Heavy",
+		WindupTime = 0.45,
+		RecoveryTime = 0.6,
+		PostureDamage = 34,
+		StepForwardForce = 24,
 	},
 }
 
