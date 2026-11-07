@@ -1,6 +1,27 @@
 --!strict
 -- Modelos de exhibición locales al ViewportFrame de cada ficha.
+local WeaponArt = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("WeaponArt"))
 local Preview = {}
+
+-- Armas con modelo detallado (Shared/WeaponArt): el mismo que se ve en la mano, de costado,
+-- inclinado y encuadrado para que entre entero en la ficha.
+local function drawArt(view: ViewportFrame, camera: Camera, id: string)
+	local model = WeaponArt.Build(id)
+	for _, d in model:GetDescendants() do
+		if d:IsA("BasePart") then
+			d.Anchored = true
+		elseif d:IsA("Weld") or d:IsA("ParticleEmitter") or d:IsA("Light") then
+			d:Destroy()
+		end
+	end
+	-- Plano del arma (eje X) hacia la cámara y en diagonal, como las demás fichas.
+	model:PivotTo(CFrame.Angles(0, 0, math.rad(-35)) * CFrame.Angles(0, math.rad(90), 0))
+	local box, size = model:GetBoundingBox()
+	local radius = math.max(size.X, size.Y) / 2
+	local distance = radius / math.tan(math.rad(camera.FieldOfView / 2)) * 1.08
+	camera.CFrame = CFrame.lookAt(box.Position + Vector3.new(0, 0, distance), box.Position)
+	model.Parent = view
+end
 
 local function segment(view: ViewportFrame, a: Vector3, b: Vector3, width: number, depth: number, color: Color3, material: Enum.Material)
 	local p = Instance.new("Part")
@@ -29,6 +50,11 @@ function Preview.draw(parent: Instance, id: string, captionHeight: number)
 	camera.CFrame = CFrame.lookAt(Vector3.new(0, 0.55, 10), Vector3.new(0, 0.55, 0))
 	view.CurrentCamera = camera
 	camera.Parent = view
+
+	if WeaponArt.Has(id) then
+		drawArt(view, camera, id)
+		return
+	end
 
 	local wood = Color3.fromRGB(193, 135, 73)
 	local steel = Color3.fromRGB(182, 199, 211)

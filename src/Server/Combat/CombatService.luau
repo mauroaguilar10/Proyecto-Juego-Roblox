@@ -402,6 +402,9 @@ local function applyHit(strike: Strike, targetHumanoid: Humanoid, targetModel: M
 	end
 
 	local healthBefore = targetHumanoid.Health
+	-- Armadura (Humanoid.Armor, la escribe ArmorService de Economía): reduce el daño recibido.
+	local armor = targetHumanoid:GetAttribute("Armor")
+	if typeof(armor) == "number" then damage *= 1 - math.clamp(armor, 0, 0.9) end
 	targetHumanoid:TakeDamage(damage)
 	local dealt = healthBefore - targetHumanoid.Health
 	if dealt <= 0 then

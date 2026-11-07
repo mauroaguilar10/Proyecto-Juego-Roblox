@@ -6,7 +6,8 @@
 	- Cada jugador que cruza el arco del lobby recibe SU PROPIA sala (Room), armada solo para él
 	  en un lugar aparte del cielo, y empieza siempre en la oleada 1. Nadie más entra ni la ve
 	  pelear: el progreso de un jugador no afecta al de los demás.
-	- La sala se cierra (y se borra) cuando el dueño sale por el portal, cuando pasa ROOM_TIMEOUT
+	- No hay portal de salida: se sale con el botón "Exit" del HUD (remote LeaveDungeon, lo manda
+	  UIController). La sala se cierra (y se borra) cuando el dueño toca "Exit", cuando pasa ROOM_TIMEOUT
 	  segundos fuera de ella (por ejemplo, porque murió y reapareció en el lobby) o cuando se va del juego.
 	  Volver a entrar arranca de nuevo en la oleada 1.
 	- Oleadas: al morir todos los guardianes empieza la siguiente, con más enemigos,
@@ -233,10 +234,11 @@ local function reward(enemy: Enemy)
 	if not player then return end
 	Data.AddKill(player)
 	-- Solo oro: las armas se consiguen únicamente en la tienda (no hay drops).
-	if not Data.ChangeGold(player, enemy.gold) then return end
+	local gold = enemy.gold * Data.GoldMultiplier(player) -- x2 con el Pase del Vacío
+	if not Data.ChangeGold(player, gold) then return end
 	Remotes.GetEvent("Notify"):FireClient(player, {
 		Kind = "Gold",
-		Amount = enemy.gold,
+		Amount = gold,
 		Position = enemy.torso.Position + Vector3.new(0, 2 * enemy.kind.scale, 0),
 	})
 end
@@ -287,9 +289,11 @@ local function onEnemyDied(enemy: Enemy, token: number)
 	local waveCleared = token == room.token and #room.enemies == 0
 	if waveCleared then
 		Sounds.PlayAt("OleadaSuperada", room.center + Vector3.new(0, 6, 0))
-		local bonus = 10 * room.wave
+		local multiplier = Data.GoldMultiplier(room.owner)
+		local bonus = 10 * room.wave * multiplier
 		if ownerInside(room) and Data.Profile(room.owner) and Data.ChangeGold(room.owner, bonus) then
-			notify(room, `¡Oleada {room.wave} superada! +{bonus} de oro`)
+			local tag = if multiplier > 1 then ` (x{multiplier} Void Pass)` else ""
+			notify(room, `¡Oleada {room.wave} superada! +{bonus} de oro{tag}`)
 		end
 	end
 	-- Oro por la baja (solo para quien dio el último golpe).
@@ -388,6 +392,9 @@ local function hitPlayer(target: Humanoid, amount: number)
 	local victim = Players:GetPlayerFromCharacter(target.Parent)
 	if not victim or victim:GetAttribute("InDuel") == true or target.Health <= 0 then return end
 	local before = target.Health
+	-- Armadura del jugador (Humanoid.Armor, la escribe ArmorService): reduce el daño recibido.
+	local armor = target:GetAttribute("Armor")
+	if typeof(armor) == "number" then amount *= 1 - math.clamp(armor, 0, 0.9) end
 	target:TakeDamage(amount)
 	if target.Health < before then
 		local root = target.RootPart
@@ -630,19 +637,7 @@ local function openRoom(player: Player): Room
 		NextWaveAt = workspace:GetServerTimeNow() + START_DELAY,
 	})
 	buildRoom(folder, center)
-
-	-- Salida contra la pared del fondo, mirando al centro.
-	local exitBase = Vector3.new(center.X, center.Y + 1, center.Z + ARENA_SIZE / 2 - 4)
-	local veil, prompt = portal(folder, "Salir", CFrame.lookAt(exitBase, Vector3.new(center.X, center.Y + 1, center.Z)), 4, 7)
-	prompt.Triggered:Connect(function(who)
-		if who ~= room.owner then return end
-		local char, root = nearPortal(who, veil, prompt)
-		if not char or not root then return end
-		Sounds.PlayAt("Portal", veil.Position)
-		char:PivotTo(CFrame.new(lobbyReturn))
-		Sounds.Play("Portal", root, 1.1)
-		closeRoom(room)
-	end)
+	-- Sin portal de salida: se sale con el botón "Exit" del HUD (remote LeaveDungeon).
 	folder.Parent = parent
 
 	local token = room.token
@@ -702,6 +697,21 @@ function DungeonService:Init()
 		char:PivotTo(CFrame.new(room.center + Vector3.new(0, 5, 15)))
 		Sounds.Play("Portal", root, 1.1)
 		Remotes.GetEvent("Notify"):FireClient(player, "Tu mazmorra: ¡preparate para la oleada 1!")
+	end)
+
+	-- Botón "Exit" (UIController): vuelve al lobby, delante del arco, y cierra la sala.
+	Remotes.GetEvent("LeaveDungeon").OnServerEvent:Connect(function(player)
+		local room = rooms[player]
+		if not room or room.closed then return end
+		local char = player.Character
+		local hum = if char then char:FindFirstChildOfClass("Humanoid") else nil
+		local root = if hum then hum.RootPart else nil
+		if char and hum and root and hum.Health > 0 and inRoom(room, root.Position) then
+			Sounds.PlayAt("Portal", root.Position)
+			char:PivotTo(CFrame.new(lobbyReturn))
+			Sounds.Play("Portal", root, 1.1)
+		end
+		closeRoom(room)
 	end)
 
 	Players.PlayerRemoving:Connect(function(player)

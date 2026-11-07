@@ -27,11 +27,14 @@ export type EventName =
 	-- Economy (Dev B)
 	| "EquipWeapon" -- C→S: equipar arma poseída
 	| "Notify" -- S→C: mensajes genéricos para la UI
+	| "LeaveDungeon" -- C→S: salir de la sala propia de la mazmorra (botón "Exit")
 
 export type FunctionName =
 	-- Economy (Dev B)
 	"PurchaseWeapon" -- C→S→C: comprar arma, devuelve resultado
 	| "GetInventory" -- C→S→C: lista de armas poseídas
+	| "RedeemCode" -- C→S→C: canjear un código promocional, devuelve (ok, mensaje)
+	| "ArmorShop" -- C→S→C: armería ("Get" | "Buy" | "Equip" | "Unequip", pieceId) → (ok, mensaje, estado)
 
 local EVENT_NAMES: { EventName } = {
 	"CombatAttack",
@@ -42,11 +45,14 @@ local EVENT_NAMES: { EventName } = {
 	"DuelStateChanged",
 	"EquipWeapon",
 	"Notify",
+	"LeaveDungeon",
 }
 
 local FUNCTION_NAMES: { FunctionName } = {
 	"PurchaseWeapon",
 	"GetInventory",
+	"RedeemCode",
+	"ArmorShop",
 }
 
 -- ── Implementación ──

@@ -16,8 +16,11 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local WeaponData = require(Shared:WaitForChild("WeaponData"))
+local ArmorData = require(Shared:WaitForChild("ArmorData"))
 
-type Profile = {gold: number, owned: {[string]: boolean}, equipped: string, bestWave: number, kills: number}
+type Profile = {gold: number, owned: {[string]: boolean}, equipped: string, bestWave: number, kills: number,
+	redeemed: {[string]: boolean}, bonusPasses: {[string]: boolean},
+	armorOwned: {[string]: boolean}, armorEquipped: {[string]: string}}
 type Session = {profile: Profile?, token: string, closing: boolean, saving: boolean, lease: number}
 local sessions: {[Player]: Session} = {}
 local memoryOnly = RunService:IsStudio() and game.GameId == 0
@@ -25,12 +28,37 @@ local store: GlobalDataStore? = nil
 local LEASE_SECONDS = 180
 local STAT_BEST_WAVE = "Mejor oleada"
 local STAT_KILLS = "Guardianes"
+-- Pase del Vacío: da la Guadaña del Vacío y duplica el oro de la mazmorra.
+-- Su ID es el GamePassId de la guadaña en WeaponData (0 = todavía no creado).
+local VOID_PASS = WeaponData.Weapons.VoidScythe.GamePassId or 0
+local VOID_GOLD_MULTIPLIER = 2
 local DataService = {
 	STAT_BEST_WAVE = STAT_BEST_WAVE, -- nombre del IntValue en leaderstats (lo lee RecordsService)
+	VOID_PASS = VOID_PASS,
 }
+-- Pases verificados en esta sesión (no se guardan: se vuelven a consultar al entrar).
+local passOwners: {[Player]: {[number]: boolean}} = {}
+
+local function markPass(player: Player, passId: number)
+	local owned = passOwners[player] or {}
+	passOwners[player] = owned
+	owned[passId] = true
+	if passId == VOID_PASS then player:SetAttribute("VoidPass", true) end
+end
 
 local function count(value: any): number
 	return if typeof(value) == "number" and value >= 0 and value < math.huge then math.floor(value) else 0
+end
+
+-- Conjunto de textos guardado como { [texto] = true }.
+local function flags(value: any): {[string]: boolean}
+	local out = {}
+	if typeof(value) == "table" then
+		for key, v in value do
+			if typeof(key) == "string" and v == true then out[key] = true end
+		end
+	end
+	return out
 end
 
 local function decode(raw: any): Profile
@@ -44,12 +72,28 @@ local function decode(raw: any): Profile
 		end
 	end
 	local equipped = data.equipped
+	-- Armadura: solo piezas que existen; lo equipado tiene que ser propio y estar en su lugar.
+	local armorOwned = {}
+	for id in flags(data.armorOwned) do
+		if ArmorData.Get(id) then armorOwned[id] = true end
+	end
+	local armorEquipped = {}
+	if typeof(data.armorEquipped) == "table" then
+		for slot, id in data.armorEquipped do
+			local piece = ArmorData.Get(id)
+			if piece and piece.Slot == slot and armorOwned[id] then armorEquipped[slot] = id end
+		end
+	end
 	return {
+		armorOwned = armorOwned,
+		armorEquipped = armorEquipped,
 		gold = count(data.gold),
 		owned = owned,
 		equipped = if typeof(equipped) == "string" and owned[equipped] then equipped else WeaponData.DEFAULT_WEAPON,
 		bestWave = count(data.bestWave),
 		kills = count(data.kills),
+		redeemed = flags(data.redeemed), -- códigos canjeados (CodeService)
+		bonusPasses = flags(data.bonusPasses), -- pases dados por código, por ID en texto
 	}
 end
 
@@ -60,9 +104,16 @@ local function verifyGamePasses(player: Player, profile: Profile)
 		if weapon.Acquisition ~= "GamePass" then continue end
 		profile.owned[id] = nil
 		local passId = weapon.GamePassId
-		if passId and passId > 0 then
+		if passId and passId > 0 and profile.bonusPasses[tostring(passId)] then
+			-- Pase obtenido con un código: queda guardado en el perfil, no depende de Roblox.
+			profile.owned[id] = true
+			markPass(player, passId)
+		elseif passId and passId > 0 then
 			local ok, owns = pcall(Marketplace.UserOwnsGamePassAsync, Marketplace, player.UserId, passId)
-			if ok and owns then profile.owned[id] = true end
+			if ok and owns then
+				profile.owned[id] = true
+				markPass(player, passId)
+			end
 		end
 	end
 	if not profile.owned[profile.equipped] then profile.equipped = WeaponData.DEFAULT_WEAPON end
@@ -123,6 +174,45 @@ function DataService.RecordWave(player: Player, wave: number): boolean
 end
 
 -- false en un place sin publicar (datos solo en memoria): no hay DataStores disponibles.
+function DataService.OwnsPass(player: Player, passId: number): boolean
+	local owned = passOwners[player]
+	return passId > 0 and owned ~= nil and owned[passId] == true
+end
+
+-- Activa un pase: recién comprado (MarketplaceService puede tardar en reflejarlo en
+-- UserOwnsGamePassAsync) o dado por un código (`permanent`: queda guardado en el perfil).
+-- Marca el pase y da las armas que trae. false si el perfil no cargó.
+function DataService.GrantPass(player: Player, passId: number, permanent: boolean?): boolean
+	local p = DataService.Profile(player)
+	if not p or passId <= 0 then return false end
+	if permanent then p.bonusPasses[tostring(passId)] = true end
+	markPass(player, passId)
+	for id, weapon in WeaponData.Weapons do
+		if weapon.Acquisition == "GamePass" and weapon.GamePassId == passId then
+			p.owned[id] = true
+		end
+	end
+	return true
+end
+
+-- Códigos promocionales (CodeService): cada código se canjea una sola vez por jugador.
+-- nil si el perfil no cargó.
+function DataService.HasRedeemed(player: Player, code: string): boolean?
+	local p = DataService.Profile(player)
+	if not p then return nil end
+	return p.redeemed[code] == true
+end
+
+function DataService.MarkRedeemed(player: Player, code: string)
+	local p = DataService.Profile(player)
+	if p then p.redeemed[code] = true end
+end
+
+-- Multiplicador del oro que da la mazmorra (x2 con el Pase del Vacío).
+function DataService.GoldMultiplier(player: Player): number
+	return if DataService.OwnsPass(player, VOID_PASS) then VOID_GOLD_MULTIPLIER else 1
+end
+
 function DataService.IsPersistent(): boolean
 	return not memoryOnly
 end
@@ -148,6 +238,8 @@ local function save(player: Player, s: Session, release: boolean)
 		local expires = os.time() + LEASE_SECONDS
 		local snapshot = {gold = profile.gold, owned = table.clone(profile.owned), equipped = profile.equipped,
 			bestWave = profile.bestWave, kills = profile.kills,
+			redeemed = table.clone(profile.redeemed), bonusPasses = table.clone(profile.bonusPasses),
+			armorOwned = table.clone(profile.armorOwned), armorEquipped = table.clone(profile.armorEquipped),
 			owner = if release then nil else s.token, expires = if release then 0 else expires}
 		local ok, result = pcall(function()
 			return (store :: GlobalDataStore):UpdateAsync(key, function(old: any)
@@ -179,6 +271,7 @@ local function loadPlayer(player: Player)
 	sessions[player] = s
 	player:SetAttribute("EquippedWeapon", WeaponData.DEFAULT_WEAPON)
 	player:SetAttribute("Gold", 0)
+	player:SetAttribute("VoidPass", false) -- true cuando se verifica el Pase del Vacío (lo lee UIController)
 	local profile: Profile? = nil
 	local failure = "sesión cerrada durante la carga"
 	if memoryOnly then
@@ -232,6 +325,7 @@ local function close(player: Player)
 	local s = sessions[player]
 	if not s or s.closing then return end
 	s.closing = true
+	passOwners[player] = nil
 	if s.profile then
 		save(player, s, true)
 		sessions[player] = nil

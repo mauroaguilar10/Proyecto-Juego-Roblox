@@ -20,10 +20,14 @@ local function useWeapon(player: Player, requested: any, purchase: boolean): (bo
 	if weapon.Acquisition == "GamePass" then
 		local passId = weapon.GamePassId
 		if not passId or passId <= 0 then return false, "Este pase todavía no está disponible." end
-		local ok, owns = pcall(MarketplaceService.UserOwnsGamePassAsync, MarketplaceService, player.UserId, passId)
-		if not ok then return false, "No se pudo verificar el pase." end
-		if not owns then return false, "Se necesita el pase de esta arma." end
-		if Data.Profile(player) ~= p or player:GetAttribute("InDuel") == true then return false, "Acción no disponible." end
+		-- Primero lo que ya se verificó en esta sesión (al entrar o al comprarlo recién).
+		if not Data.OwnsPass(player, passId) then
+			local ok, owns = pcall(MarketplaceService.UserOwnsGamePassAsync, MarketplaceService, player.UserId, passId)
+			if not ok then return false, "No se pudo verificar el pase." end
+			if not owns then return false, "Se necesita el pase de esta arma." end
+			if Data.Profile(player) ~= p or player:GetAttribute("InDuel") == true then return false, "Acción no disponible." end
+			Data.GrantPass(player, passId)
+		end
 		p.owned[requested] = true
 	end
 	if purchase then
@@ -65,6 +69,23 @@ function ShopService:Init()
 	Remotes.GetEvent("EquipWeapon").OnServerEvent:Connect(function(player, id)
 		local _, message = request(player, id, false)
 		if player.Parent == Players then notify:FireClient(player, message) end
+	end)
+	-- Compra de un pase: se activa enseguida (UserOwnsGamePassAsync puede tardar en reflejarla)
+	-- y, si trae un arma, se la equipa.
+	MarketplaceService.PromptGamePassPurchaseFinished:Connect(function(player, passId, purchased)
+		if not purchased or player.Parent ~= Players then return end
+		if not Data.GrantPass(player, passId) then
+			notify:FireClient(player, "¡Gracias por tu compra! El pase se activa la próxima vez que entres.")
+			return
+		end
+		for id, weapon in WeaponData.Weapons do
+			if weapon.GamePassId == passId and player:GetAttribute("InDuel") ~= true then
+				Data.Equip(player, id)
+			end
+		end
+		if passId == Data.VOID_PASS then
+			notify:FireClient(player, "¡Void Pass activado! Guadaña del Vacío equipada y oro x2 en la mazmorra.")
+		end
 	end)
 	Players.PlayerRemoving:Connect(function(player)
 		lastAction[player] = nil

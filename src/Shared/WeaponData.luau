@@ -49,16 +49,54 @@ local Weapons: { [string]: WeaponStats } = {
 		GamePassId = nil,
 	},
 
+	-- Armas detalladas (modelo en Shared/WeaponArt).
+	FrostFang = {
+		Id = "FrostFang",
+		DisplayName = "Colmillo de Escarcha",
+		Damage = 21,
+		AttackCooldown = 0.7,
+		Range = 7.5,
+		Acquisition = "Gold",
+		Price = 1500,
+		DropChance = 0,
+		GamePassId = nil,
+	},
+
+	DawnSpear = {
+		Id = "DawnSpear",
+		DisplayName = "Lanza del Alba",
+		Damage = 19,
+		AttackCooldown = 0.6,
+		Range = 10,
+		Acquisition = "Gold",
+		Price = 3000,
+		DropChance = 0,
+		GamePassId = nil,
+	},
+
+	ColossusAxe = {
+		Id = "ColossusAxe",
+		DisplayName = "Hacha del Coloso",
+		Damage = 38,
+		AttackCooldown = 1.1,
+		Range = 7,
+		Acquisition = "Gold",
+		Price = 6000,
+		DropChance = 0,
+		GamePassId = nil,
+	},
+
+	-- Arma del Pase del Vacío (el pase además duplica el oro de la mazmorra: ver DataService).
 	VoidScythe = {
 		Id = "VoidScythe",
 		DisplayName = "Guadaña del Vacío",
-		Damage = 24,
-		AttackCooldown = 0.9,
+		Damage = 30,
+		AttackCooldown = 0.85,
 		Range = 9,
 		Acquisition = "GamePass",
 		Price = 0,
 		DropChance = 0,
-		GamePassId = 0, -- TODO: reemplazar por el ID real del GamePass
+		GamePassId = 2075385839, -- "Void pass" en Roblox
 	},
 }
 
