@@ -1,0 +1,30 @@
+# ── Roblox place/model builds (se generan con `rojo build`) ──
+*.rbxl
+*.rbxlx
+*.rbxl.lock
+*.rbxlx.lock
+*.rbxm
+*.rbxmx
+/build/
+
+# ── Rojo / Luau LSP ──
+sourcemap.json
+
+# ── Wally (dependencias instaladas, se regeneran con `wally install`) ──
+/Packages/
+/ServerPackages/
+/DevPackages/
+
+# ── Toolchains locales ──
+/.rokit/
+/.aftman/
+
+# ── Sistema operativo / editores ──
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.log
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
