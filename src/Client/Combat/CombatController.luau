@@ -3,12 +3,12 @@
 	CombatController — Input de ataque y feedback visual de golpes.
 	Owner: Dev A (Combat).
 
-	- Click izquierdo / R2 / botón táctil → Remotes "CombatAttack".
+	- El arma es una Tool de inventario (ver WeaponVisualService). Con ella en la mano,
+	  Tool.Activated (click izquierdo / toque / R2) → Remotes "CombatAttack".
 	- Cooldown predicho en cliente solo para no spamear; el servidor es quien valida.
 	- Remotes "CombatFeedback" → destello rojo sobre el objetivo golpeado.
 ]]
 
-local ContextActionService = game:GetService("ContextActionService")
 local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -18,7 +18,6 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local WeaponData = require(Shared:WaitForChild("WeaponData"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 
-local ACTION_ATTACK = "CombatAttack"
 local HIT_FLASH_DURATION = 0.15
 local HIT_FLASH_COLOR = Color3.fromRGB(255, 60, 60)
 
@@ -34,6 +33,7 @@ local localPlayer = Players.LocalPlayer
 local lastAttackAt = -math.huge
 local swingTokens: { [Weld]: number } = setmetatable({}, { __mode = "k" }) :: any
 local restC0: { [Weld]: CFrame } = setmetatable({}, { __mode = "k" }) :: any
+local hookedTools: { [Tool]: boolean } = setmetatable({}, { __mode = "k" }) :: any
 
 local CombatController = {}
 
@@ -119,28 +119,40 @@ local function flashTarget(target: Model)
 	Debris:AddItem(highlight, HIT_FLASH_DURATION)
 end
 
+-- Conecta Activated de la Tool del arma (Attribute "WeaponId") una sola vez por Tool.
+local function hookWeaponTool(child: Instance, attackEvent: RemoteEvent)
+	if not child:IsA("Tool") or child:GetAttribute("WeaponId") == nil or hookedTools[child] then
+		return
+	end
+	hookedTools[child] = true
+	child.Activated:Connect(function()
+		local character = localPlayer.Character
+		if not character or child.Parent ~= character or not canAttack() then
+			return
+		end
+		lastAttackAt = os.clock()
+		attackEvent:FireServer()
+		playSwing(character)
+	end)
+end
+
 function CombatController:Init()
 	local attackEvent = Remotes.GetEvent("CombatAttack")
 	local feedbackEvent = Remotes.GetEvent("CombatFeedback")
 
-	ContextActionService:BindAction(
-		ACTION_ATTACK,
-		function(_actionName: string, inputState: Enum.UserInputState, _input: InputObject)
-			if inputState == Enum.UserInputState.Begin and canAttack() then
-				lastAttackAt = os.clock()
-				attackEvent:FireServer()
-				local character = localPlayer.Character
-				if character then
-					playSwing(character)
-				end
-			end
-			return Enum.ContextActionResult.Pass
-		end,
-		true, -- botón táctil en mobile
-		Enum.UserInputType.MouseButton1,
-		Enum.KeyCode.ButtonR2
-	)
-	ContextActionService:SetTitle(ACTION_ATTACK, "Atacar")
+	-- La Tool se equipa moviéndose al personaje: basta con vigilar sus hijos.
+	local function watchOwnCharacter(character: Model)
+		character.ChildAdded:Connect(function(child)
+			hookWeaponTool(child, attackEvent)
+		end)
+		for _, child in character:GetChildren() do
+			hookWeaponTool(child, attackEvent)
+		end
+	end
+	localPlayer.CharacterAdded:Connect(watchOwnCharacter)
+	if localPlayer.Character then
+		task.spawn(watchOwnCharacter, localPlayer.Character)
+	end
 
 	feedbackEvent.OnClientEvent:Connect(function(payload: any)
 		if typeof(payload) ~= "table" then

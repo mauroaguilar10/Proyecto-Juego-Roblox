@@ -60,6 +60,9 @@ El **escritor** es el único que puede hacer `SetAttribute`. Los demás solo lee
   de un jugador. `DungeonService` solo necesita spawnear Models así; no hace falta tag.
 - **PvP** solo entre oponentes del mismo duelo (`ArenaService.AreOpponents`). Fuera de duelo
   los jugadores no se dañan entre sí; en duelo no se puede dañar a enemigos.
+- **Arma = Tool de inventario.** `WeaponVisualService` da a cada personaje una única Tool
+  (Attribute `WeaponId`) del arma de `EquippedWeapon`; se saca/guarda desde la barra de Roblox.
+  Solo se ataca con ella en la mano (`WeaponVisualService.IsWeaponHeld`). No crear otras Tools de arma.
 
 **Remotes de duelo (para la UI de Economy)**
 

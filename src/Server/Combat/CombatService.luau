@@ -23,6 +23,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local WeaponData = require(Shared:WaitForChild("WeaponData"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local ArenaService = require(script.Parent:WaitForChild("ArenaService"))
+local WeaponVisualService = require(script.Parent:WaitForChild("WeaponVisualService"))
 
 type CombatState = "Idle" | "Attacking" | "Stunned" | "Dead"
 
@@ -188,6 +189,11 @@ end
 local function onAttackRequested(player: Player)
 	local character, humanoid, root = getAliveCharacter(player)
 	if not character or not humanoid or not root then
+		return
+	end
+
+	-- Solo se ataca con el arma en la mano (Tool de inventario, ver WeaponVisualService).
+	if not WeaponVisualService.IsWeaponHeld(player) then
 		return
 	end
 
