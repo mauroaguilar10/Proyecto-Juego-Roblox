@@ -1,13 +1,14 @@
 --!strict
 --[[
-	HealthBarController — Barras de vida sobre personajes y barra de aguante propia.
+	HealthBarController — Barras de vida y de postura sobre personajes, y barra de postura propia.
 	Owner: Dev A (Combat).
 
 	- Enemigos (Humanoid sin jugador): barra con nombre, siempre visible de cerca.
-	- Otros jugadores: barra solo cuando tienen menos vida que el máximo (el nombre ya lo pone Roblox).
+	- Otros jugadores: vida + postura (Humanoid.Posture, crece desde el centro como en un duelo de
+	  postura), visibles cuando están heridos o con postura acumulada (el nombre ya lo pone Roblox).
 	  Oculta la barra de vida por defecto de Roblox (solo en este cliente) para no duplicarla.
-	- Jugador local: barra de aguante (Humanoid.Stamina, la escribe CombatService) sobre la hotbar,
-	  visible con el arma en la mano o mientras no esté llena.
+	- Jugador local: barra de postura sobre la hotbar, visible mientras tenga postura acumulada.
+	  Parpadea en rojo con la guardia rota (CombatState "PostureBroken").
 ]]
 
 local Players = game:GetService("Players")
@@ -19,9 +20,20 @@ local BAR_SIZE = UDim2.fromOffset(110, 12)
 local BAR_TWEEN = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local FULL_COLOR = Color3.fromRGB(80, 220, 100)
 local LOW_COLOR = Color3.fromRGB(230, 60, 60)
-local MAX_STAMINA = 100 -- igual que CombatService
-local STAMINA_COLOR = Color3.fromRGB(255, 205, 60)
-local STAMINA_EMPTY_COLOR = Color3.fromRGB(200, 110, 40)
+local MAX_POSTURE = 100 -- igual que CombatService
+local POSTURE_LOW_COLOR = Color3.fromRGB(255, 215, 90)
+local POSTURE_HIGH_COLOR = Color3.fromRGB(255, 70, 30)
+local POSTURE_BAR_HEIGHT = 6
+local BAR_GAP = 3
+
+local function postureRatio(humanoid: Humanoid): number
+	local value = humanoid:GetAttribute("Posture")
+	return if typeof(value) == "number" then math.clamp(value / MAX_POSTURE, 0, 1) else 0
+end
+
+local function postureColor(ratio: number): Color3
+	return POSTURE_LOW_COLOR:Lerp(POSTURE_HIGH_COLOR, ratio)
+end
 
 local localPlayer = Players.LocalPlayer
 local bars: { [Humanoid]: BillboardGui } = {}
@@ -84,7 +96,7 @@ local function attachBar(humanoid: Humanoid)
 	gui.AlwaysOnTop = true
 	gui.LightInfluence = 0
 	gui.MaxDistance = MAX_DISTANCE
-	gui.Size = UDim2.fromOffset(BAR_SIZE.X.Offset, if owner then BAR_SIZE.Y.Offset else 32)
+	gui.Size = UDim2.fromOffset(BAR_SIZE.X.Offset, if owner then BAR_SIZE.Y.Offset + BAR_GAP + POSTURE_BAR_HEIGHT else 32)
 	gui.StudsOffsetWorldSpace = Vector3.new(0, if owner then 3.4 else 2.4, 0)
 
 	if not owner then
@@ -98,7 +110,18 @@ local function attachBar(humanoid: Humanoid)
 		label.TextStrokeTransparency = 0.3
 		label.Parent = gui
 	end
-	local _, fill = makeBar(gui, UDim2.new(1, 0, 0, BAR_SIZE.Y.Offset), UDim2.new(0, 0, 1, -BAR_SIZE.Y.Offset))
+	local healthPosition = if owner then UDim2.fromScale(0, 0) else UDim2.new(0, 0, 1, -BAR_SIZE.Y.Offset)
+	local _, fill = makeBar(gui, UDim2.new(1, 0, 0, BAR_SIZE.Y.Offset), healthPosition)
+
+	-- Postura (solo jugadores): crece desde el centro hacia los lados.
+	local postureFill: Frame? = nil
+	if owner then
+		local _, pFill = makeBar(gui, UDim2.new(1, 0, 0, POSTURE_BAR_HEIGHT), UDim2.new(0, 0, 1, -POSTURE_BAR_HEIGHT))
+		pFill.AnchorPoint = Vector2.new(0.5, 0)
+		pFill.Position = UDim2.fromScale(0.5, 0)
+		pFill.Size = UDim2.fromScale(0, 1)
+		postureFill = pFill
+	end
 
 	local function refresh()
 		local ratio = if humanoid.MaxHealth > 0 then math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1) else 0
@@ -106,11 +129,19 @@ local function attachBar(humanoid: Humanoid)
 			Size = UDim2.fromScale(ratio, 1),
 			BackgroundColor3 = LOW_COLOR:Lerp(FULL_COLOR, ratio),
 		}):Play()
-		gui.Enabled = not owner or ratio < 1
+		local posture = postureRatio(humanoid)
+		if postureFill then
+			TweenService:Create(postureFill, BAR_TWEEN, {
+				Size = UDim2.fromScale(posture, 1),
+				BackgroundColor3 = postureColor(posture),
+			}):Play()
+		end
+		gui.Enabled = not owner or ratio < 1 or posture > 0
 	end
 	refresh()
 	humanoid.HealthChanged:Connect(refresh)
 	humanoid:GetPropertyChangedSignal("MaxHealth"):Connect(refresh)
+	humanoid:GetAttributeChangedSignal("Posture"):Connect(refresh)
 	humanoid.Died:Once(function()
 		task.delay(1, removeBar, humanoid)
 	end)
@@ -130,24 +161,20 @@ local function onDescendantAdded(instance: Instance)
 	end
 end
 
--- ── Aguante ──
+-- ── Postura propia ──
 
-local function buildStaminaBar(): (ScreenGui, Frame)
+local function buildPostureBar(): (ScreenGui, Frame)
 	local screen = Instance.new("ScreenGui")
-	screen.Name = "CombatStamina"
+	screen.Name = "CombatPosture"
 	screen.ResetOnSpawn = false
 	screen.IgnoreGuiInset = true
 
-	local back, fill = makeBar(screen, UDim2.fromOffset(220, 8), UDim2.new(0.5, -110, 1, -84))
-	back.Name = "Stamina"
-	fill.BackgroundColor3 = STAMINA_COLOR
+	local back, fill = makeBar(screen, UDim2.fromOffset(240, 8), UDim2.new(0.5, -120, 1, -84))
+	back.Name = "Posture"
+	fill.AnchorPoint = Vector2.new(0.5, 0)
+	fill.Position = UDim2.fromScale(0.5, 0)
 	screen.Parent = localPlayer:WaitForChild("PlayerGui")
 	return screen, fill
-end
-
-local function hasWeaponInHand(character: Model): boolean
-	local tool = character:FindFirstChildOfClass("Tool")
-	return tool ~= nil and tool:GetAttribute("WeaponId") ~= nil
 end
 
 function HealthBarController:Init()
@@ -156,19 +183,23 @@ function HealthBarController:Init()
 		onDescendantAdded(instance)
 	end
 
-	local screen, fill = buildStaminaBar()
+	local screen, fill = buildPostureBar()
 	RunService.RenderStepped:Connect(function()
 		local character = localPlayer.Character
 		local humanoid = if character then character:FindFirstChildOfClass("Humanoid") else nil
-		local stamina = if humanoid then humanoid:GetAttribute("Stamina") else nil
-		if not character or not humanoid or typeof(stamina) ~= "number" or humanoid.Health <= 0 then
+		if not humanoid or humanoid.Health <= 0 then
 			screen.Enabled = false
 			return
 		end
-		local ratio = math.clamp(stamina / MAX_STAMINA, 0, 1)
-		screen.Enabled = ratio < 1 or hasWeaponInHand(character)
+		local ratio = postureRatio(humanoid)
+		screen.Enabled = ratio > 0
 		fill.Size = UDim2.fromScale(ratio, 1)
-		fill.BackgroundColor3 = STAMINA_EMPTY_COLOR:Lerp(STAMINA_COLOR, ratio)
+		if humanoid:GetAttribute("CombatState") == "PostureBroken" then
+			local blink = math.sin(os.clock() * 20) > 0
+			fill.BackgroundColor3 = if blink then POSTURE_HIGH_COLOR else Color3.new(1, 1, 1)
+		else
+			fill.BackgroundColor3 = postureColor(ratio)
+		end
 	end)
 end
 
