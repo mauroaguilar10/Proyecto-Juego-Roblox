@@ -1,4 +1,4 @@
-﻿# ARCHITECTURE
+# ARCHITECTURE
 
 Juego de **Duelos 1v1** + **farmeo en Mazmorras** + **Tienda de armas**.
 Stack: Luau `--!strict`, Rojo 7.3+ (archivos `.luau`).
@@ -46,10 +46,15 @@ El **escritor** es el único que puede hacer `SetAttribute`. Los demás solo lee
 | `Stamina`        | `Humanoid` de jugadores                 | `number`  | `0..100` (aguante para bloquear y esquivar)       | `CombatService` (A)          | `CombatController`, `HealthBarController` |
 | `Blocking`       | `Humanoid` de jugadores                 | `boolean` | `true` mientras bloquea                           | `CombatService` (A)          | `CombatController` |
 | `ComboStep`      | `Humanoid` de jugadores                 | `number`  | `1..3`, golpe del combo en curso (0 = ninguno)    | `CombatService` (A)          | `CombatController` |
-| `Wave`           | `workspace.Mazmorra`                    | `number`  | oleada actual (0 = todavía ninguna)               | `DungeonService` (B)         | `UIController` |
-| `EnemiesLeft`    | `workspace.Mazmorra`                    | `number`  | guardianes vivos de la oleada                     | `DungeonService` (B)         | `UIController` |
-| `NextWaveAt`     | `workspace.Mazmorra`                    | `number`  | `workspace:GetServerTimeNow()` de la próxima oleada (0 = ninguna pendiente) | `DungeonService` (B) | `UIController` |
-| `Center` / `Size`| `workspace.Mazmorra`                    | `Vector3` / `number` | centro y lado de la sala (para saber si el jugador está adentro) | `DungeonService` (B) | `UIController` |
+| `Wave`           | `workspace.Mazmorra.Sala_<UserId>`      | `number`  | oleada actual (0 = todavía ninguna)               | `DungeonService` (B)         | `UIController` |
+| `EnemiesLeft`    | `workspace.Mazmorra.Sala_<UserId>`      | `number`  | guardianes vivos de la oleada                     | `DungeonService` (B)         | `UIController` |
+| `NextWaveAt`     | `workspace.Mazmorra.Sala_<UserId>`      | `number`  | `workspace:GetServerTimeNow()` de la próxima oleada (0 = ninguna pendiente) | `DungeonService` (B) | `UIController` |
+| `Center` / `Size`| `workspace.Mazmorra.Sala_<UserId>`      | `Vector3` / `number` | centro y lado de la sala (para saber si el jugador está adentro) | `DungeonService` (B) | `UIController` |
+
+**Mazmorras individuales (DungeonService, B):** cada jugador que cruza el arco recibe su propia sala
+(`workspace.Mazmorra.Sala_<UserId>`, a 160 studs de altura y separadas 160 en X) y empieza en la oleada 1.
+La sala se borra al salir por el portal, al pasar 8 s fuera de ella (muerte, duelo) o al irse del juego.
+Los guardianes solo atacan al dueño de la sala. El arco del lobby está en `workspace.Mazmorra.Entrada`.
 
 **Progreso guardado (DataService, B):** `bestWave` (mejor oleada alcanzada) y `kills` (guardianes
 derrotados) se guardan en el perfil y se muestran en `Player.leaderstats` ("Mejor oleada", "Guardianes").
@@ -60,9 +65,15 @@ cartel de récords del lobby. Las armas de GamePass se vuelven a verificar cada 
 `{ Kind = "Gold", Amount: number, Position: Vector3 }` al jugador que mató a un guardián;
 `UIController` muestra el «+N» en el mundo y las monedas volando al contador.
 
-**Lobby (B):** `LobbyService` arma el puesto de la tienda; su `ProximityPrompt` tiene el Attribute
-`OpenShop = true` y `UIController` abre la tienda al activarlo (sin pasar por el servidor).
-`DungeonService` arma el arco de entrada a la mazmorra y `RecordsService` el cartel de récords.
+**Lobby (B):** `LobbyService` arma la ciudadela alrededor del spawn (`workspace.Lobby`): plaza, muralla,
+torres, estatua, herrería, campamento, arena de duelos decorativa y el puesto de la tienda; su
+`ProximityPrompt` tiene el Attribute `OpenShop = true` y `UIController` abre la tienda al activarlo
+(sin pasar por el servidor). `DungeonService` arma el arco de entrada a la mazmorra (este del spawn) y
+`RecordsService` el cartel de récords (oeste). Las piezas reutilizables están en `Economy/Lobby/Kit`.
+- **Muñecos de práctica** (campo de entrenamiento): Models con `Humanoid` y partes ancladas;
+  `CombatService` los golpea como a cualquier enemigo fuera de duelo. Se curan solos y no dan oro.
+- **Iluminación:** `LobbyService` configura `Lighting` al arrancar (atardecer, `Atmosphere`, bloom).
+  `UIController` la oscurece solo en el cliente mientras el jugador está en su sala de la mazmorra.
 
 **Garantías**
 
