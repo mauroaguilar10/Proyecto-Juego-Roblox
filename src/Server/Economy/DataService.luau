@@ -158,6 +158,9 @@ local function save(player: Player, s: Session, release: boolean)
 		if ok then
 			if result then
 				s.lease = expires
+				if release then
+					print(`[Economy] Guardado al salir: {player.Name} · oro {profile.gold} · mejor oleada {profile.bestWave} · guardianes {profile.kills}`)
+				end
 			else
 				s.lease = 0
 				if not release and player.Parent == Players then player:Kick("La sesión de datos cambió. Volvé a entrar.") end
@@ -177,6 +180,7 @@ local function loadPlayer(player: Player)
 	player:SetAttribute("EquippedWeapon", WeaponData.DEFAULT_WEAPON)
 	player:SetAttribute("Gold", 0)
 	local profile: Profile? = nil
+	local failure = "sesión cerrada durante la carga"
 	if memoryOnly then
 		profile = decode(nil)
 	else
@@ -196,14 +200,20 @@ local function loadPlayer(player: Player)
 			if ok and raw then
 				profile = decode(raw)
 				s.lease = expires
+				local loaded = profile :: Profile
+				local weapons = {}
+				for id in loaded.owned do table.insert(weapons, id) end
+				print(`[Economy] Datos cargados: {player.Name} · oro {loaded.gold} · armas {table.concat(weapons, ", ")} · mejor oleada {loaded.bestWave} · guardianes {loaded.kills}`)
 				break
 			end
+			failure = if ok then "otra sesión tiene tus datos abiertos" else tostring(raw)
+			warn(`[Economy] Carga intento {attempt}/4 de {player.Name}: {failure}`)
 			if attempt < 4 then task.wait(attempt) end
 		end
 	end
 	if not profile then
 		sessions[player] = nil
-		if player.Parent == Players then player:Kick("No se pudieron cargar tus datos. Volvé a entrar.") end
+		if player.Parent == Players then player:Kick(`No se pudieron cargar tus datos ({failure}). Volvé a entrar.`) end
 		return
 	end
 	verifyGamePasses(player, profile)

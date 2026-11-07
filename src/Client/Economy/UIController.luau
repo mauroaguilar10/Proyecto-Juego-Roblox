@@ -1,5 +1,9 @@
 --!strict
 local Players = game:GetService("Players")
+local Debris = game:GetService("Debris")
+local Lighting = game:GetService("Lighting")
+local ProximityPromptService = game:GetService("ProximityPromptService")
+local TweenService = game:GetService("TweenService")
 local Marketplace = game:GetService("MarketplaceService")
 local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
 local Remotes = require(Shared:WaitForChild("Remotes") :: ModuleScript)
@@ -108,6 +112,40 @@ local function statsText(w: WeaponData.WeaponStats, compare: WeaponData.WeaponSt
 	return table.concat(out, "\n")
 end
 
+-- ── Iluminación de la mazmorra ──
+-- Solo en este cliente: al entrar a la sala la luz general baja y queda la de las antorchas;
+-- al salir se restaura lo que había.
+local DUNGEON_LIGHT: { [string]: any } = {
+	Ambient = Color3.fromRGB(26, 24, 32),
+	OutdoorAmbient = Color3.fromRGB(30, 28, 38),
+	Brightness = 0.35,
+	ExposureCompensation = -0.25,
+}
+local savedLight: { [string]: any }? = nil
+local function setDungeonLighting(on: boolean)
+	local info = TweenInfo.new(0.8, Enum.EasingStyle.Sine)
+	local tint = Lighting:FindFirstChild("TonoMazmorra")
+	if on and not savedLight then
+		local saved = {}
+		for property in DUNGEON_LIGHT do
+			saved[property] = (Lighting :: any)[property]
+		end
+		savedLight = saved
+		TweenService:Create(Lighting, info, DUNGEON_LIGHT):Play()
+		if not tint then
+			local effect = Instance.new("ColorCorrectionEffect")
+			effect.Name = "TonoMazmorra"
+			effect.TintColor = Color3.fromRGB(255, 226, 200)
+			effect.Saturation, effect.Contrast = -0.15, 0.1
+			effect.Parent = Lighting
+		end
+	elseif not on and savedLight then
+		TweenService:Create(Lighting, info, savedLight):Play()
+		savedLight = nil
+		if tint then tint:Destroy() end
+	end
+end
+
 -- ── Panel de la mazmorra ──
 -- Lee los Attributes que publica DungeonService en workspace.Mazmorra y se muestra
 -- solo mientras el jugador está dentro de la sala.
@@ -136,6 +174,7 @@ local function dungeonPanel(gui: ScreenGui)
 				inside = math.abs(offset.X) <= size / 2 and math.abs(offset.Z) <= size / 2 and offset.Y > -5 and offset.Y < 25
 			end
 			box.Visible = inside
+			setDungeonLighting(inside)
 			if inside then
 				local wave = dungeon:GetAttribute("Wave")
 				local left = dungeon:GetAttribute("EnemiesLeft")
@@ -232,10 +271,90 @@ function UIController:Init()
 	local inventoryOnly = false
 	type Card = {button: TextButton, state: TextLabel, stats: TextLabel, border: UIStroke}
 	local rows: {[string]: Card} = {}
-	local function render()
+	-- Contador de oro animado: sube de a poco hasta el valor nuevo y el recuadro "late" al ganar.
+	local goldBox = hudGold.Parent :: GuiObject
+	local goldPop = Instance.new("UIScale")
+	goldPop.Parent = goldBox
+	local goldShown = Instance.new("NumberValue")
+	local goldTarget: number? = nil
+	local function writeGold(value: number)
+		local text = tostring(math.floor(value + 0.5))
+		hudGold.Text, shopGold.Text = text, text
+	end
+	goldShown.Changed:Connect(writeGold)
+	local function updateGold()
 		local value = player:GetAttribute("Gold")
-		local amount = if typeof(value) == "number" then tostring(value) else "…"
-		hudGold.Text, shopGold.Text = amount, amount
+		if typeof(value) ~= "number" then
+			hudGold.Text, shopGold.Text = "…", "…"
+			return
+		end
+		if goldTarget == nil then
+			goldTarget = value
+			goldShown.Value = value
+			writeGold(value)
+			return
+		end
+		if value == goldTarget then return end
+		local gained = value > (goldTarget :: number)
+		goldTarget = value
+		TweenService:Create(goldShown, TweenInfo.new(0.7, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Value = value }):Play()
+		if gained then
+			goldPop.Scale = 1.18
+			TweenService:Create(goldPop, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+		end
+	end
+
+	-- "+N" flotando donde murió el guardián y monedas que vuelan hasta el contador.
+	local function goldBurst(amount: number, position: Vector3)
+		local anchor = Instance.new("Attachment")
+		anchor.WorldPosition = position
+		anchor.Parent = workspace.Terrain
+		local billboard = Instance.new("BillboardGui")
+		billboard.Size = UDim2.fromOffset(140, 44)
+		billboard.AlwaysOnTop, billboard.LightInfluence = true, 0
+		billboard.Parent = anchor
+		local text = Instance.new("TextLabel")
+		text.Size = UDim2.fromScale(1, 1)
+		text.BackgroundTransparency = 1
+		text.Font = Enum.Font.GothamBlack
+		text.TextSize = 30
+		text.TextColor3 = gold
+		text.TextStrokeColor3, text.TextStrokeTransparency = Color3.fromRGB(70, 45, 10), 0.2
+		text.Text = `+{amount}`
+		text.Parent = billboard
+		local rise = TweenInfo.new(1.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		TweenService:Create(billboard, rise, { StudsOffsetWorldSpace = Vector3.new(0, 3, 0) }):Play()
+		TweenService:Create(text, rise, { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+		Debris:AddItem(anchor, 1.2)
+
+		local camera = workspace.CurrentCamera
+		if not camera or not goldBox.Visible then return end
+		local screen, onScreen = camera:WorldToScreenPoint(position)
+		if not onScreen then return end
+		local target = goldBox.AbsolutePosition + Vector2.new(22, goldBox.AbsoluteSize.Y / 2)
+		for i = 1, math.clamp(2 + math.floor(amount / 25), 3, 8) do
+			local coin = frame(gui, UDim2.fromOffset(screen.X, screen.Y), UDim2.fromOffset(16, 16), gold)
+			coin.AnchorPoint = Vector2.new(0.5, 0.5)
+			coin.ZIndex = 6
+			Instance.new("UICorner", coin).CornerRadius = UDim.new(1, 0)
+			stroke(coin, Color3.fromRGB(150, 100, 30))
+			local angle = math.random() * math.pi * 2
+			local spread = Vector2.new(math.cos(angle), math.sin(angle)) * math.random(30, 70)
+			local burst = TweenService:Create(coin, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+				{ Position = UDim2.fromOffset(screen.X + spread.X, screen.Y + spread.Y) })
+			burst:Play()
+			burst.Completed:Once(function()
+				task.wait(0.05 * i)
+				local fly = TweenService:Create(coin, TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+					{ Position = UDim2.fromOffset(target.X, target.Y), Size = UDim2.fromOffset(10, 10) })
+				fly:Play()
+				fly.Completed:Once(function() coin:Destroy() end)
+			end)
+		end
+	end
+
+	local function render()
+		updateGold()
 		all.TextColor3 = if inventoryOnly then muted else gold
 		mine.TextColor3 = if inventoryOnly then gold else muted
 		underline.Position = UDim2.fromOffset(if inventoryOnly then 124 else 16,107)
@@ -357,9 +476,19 @@ function UIController:Init()
 	all.Activated:Connect(function() filter(false) end)
 	mine.Activated:Connect(function() filter(true) end)
 	for _, attr in {"Gold", "EquippedWeapon", "InDuel"} do player:GetAttributeChangedSignal(attr):Connect(render) end
-	Remotes.GetEvent("Notify").OnClientEvent:Connect(function(text)
-		if typeof(text) == "string" then notify(text) end
+	-- "Notify" trae texto, o una tabla {Kind = "Gold", Amount, Position} cuando un guardián da oro.
+	Remotes.GetEvent("Notify").OnClientEvent:Connect(function(payload)
+		if typeof(payload) == "string" then
+			notify(payload)
+		elseif typeof(payload) == "table" and payload.Kind == "Gold"
+			and typeof(payload.Amount) == "number" and typeof(payload.Position) == "Vector3" then
+			goldBurst(payload.Amount, payload.Position)
+		end
 		if panel.Visible then refresh() end
+	end)
+	-- Mostrador de la tienda en el lobby (LobbyService): su ProximityPrompt tiene OpenShop = true.
+	ProximityPromptService.PromptTriggered:Connect(function(prompt)
+		if prompt:GetAttribute("OpenShop") == true then show(true) end
 	end)
 	render()
 	gui.Parent = player:WaitForChild("PlayerGui")
