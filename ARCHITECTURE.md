@@ -54,6 +54,13 @@ El **escritor** es el único que puede hacer `SetAttribute`. Los demás solo lee
   puede leerlo al escuchar `Humanoid.Died`.
 - Mientras `InDuel == true`, Economy debe bloquear compra/equipamiento y entrada a mazmorra.
 
+**Reglas de daño (CombatService)**
+
+- **Enemigo** = cualquier `Model` con `Humanoid` (y `Humanoid.RootPart`) que no sea el personaje
+  de un jugador. `DungeonService` solo necesita spawnear Models así; no hace falta tag.
+- **PvP** solo entre oponentes del mismo duelo (`ArenaService.AreOpponents`). Fuera de duelo
+  los jugadores no se dañan entre sí; en duelo no se puede dañar a enemigos.
+
 ## 4. Contrato de módulos
 
 Todo `ModuleScript` dentro de `Combat/` o `Economy/` (servidor y cliente) **debe**
