@@ -10,6 +10,7 @@
 	  así no se acumula sobre el CFrame de la cámara).
 	- ParrySpark: destello de luz + chispas amarillas/naranjas en un punto.
 	- GuardBreakBurst: efecto rojo intenso sobre el personaje con la guardia rota.
+	- DashMove: física del dash local (LinearVelocity en XZ con fricción).
 ]]
 
 local Debris = game:GetService("Debris")
@@ -264,6 +265,49 @@ function CombatEffects.GuardBreakBurst(model: Model)
 		emitSparks(part, Color3.fromRGB(255, 90, 70), Color3.fromRGB(140, 0, 0), 60, NumberRange.new(18, 34), 0.5)
 		Debris:AddItem(part, 1)
 	end
+end
+
+
+-- ── Movimiento ──
+
+--[[
+	Dash local (el cliente es dueño de la física de su personaje): LinearVelocity en el plano XZ
+	(Y libre: no vuela en rampas) con arranque explosivo que decae con fricción (curva cuadrática).
+]]
+function CombatEffects.DashMove(root: BasePart, direction: Vector3, speed: number, duration: number, maxAccel: number)
+	local previous = root:FindFirstChild("CombatDash")
+	if previous then
+		previous:Destroy()
+	end
+
+	local attachment = Instance.new("Attachment")
+	attachment.Name = "CombatDash"
+
+	local mover = Instance.new("LinearVelocity")
+	mover.Attachment0 = attachment
+	mover.RelativeTo = Enum.ActuatorRelativeTo.World
+	mover.VelocityConstraintMode = Enum.VelocityConstraintMode.Plane
+	mover.PrimaryTangentAxis = Vector3.xAxis
+	mover.SecondaryTangentAxis = Vector3.zAxis
+	mover.PlaneVelocity = Vector2.new(direction.X, direction.Z) * speed
+	mover.MaxForce = root.AssemblyMass * maxAccel
+	mover.Parent = attachment
+	attachment.Parent = root
+
+	local elapsed = 0
+	local connection: RBXScriptConnection? = nil
+	connection = RunService.Heartbeat:Connect(function(dt)
+		elapsed += dt
+		if elapsed >= duration or not attachment.Parent then
+			if connection then
+				connection:Disconnect()
+			end
+			attachment:Destroy()
+			return
+		end
+		local falloff = (1 - elapsed / duration) ^ 2
+		mover.PlaneVelocity = Vector2.new(direction.X, direction.Z) * (speed * falloff)
+	end)
 end
 
 return CombatEffects

@@ -13,8 +13,12 @@
 	              explosiva que decae en 0,25 s; el servidor da los i-frames.
 	El servidor (CombatService) valida todo. Acá solo se predicen cooldowns para no spamear.
 
-	Animaciones: se disparan con Humanoid.CombatState de CADA personaje (Windup → carga,
-	Attacking → tajo, Parrying/Blocking → guardia, Stunned/PostureBroken → tambaleo).
+	Animaciones y efectos: se disparan con Humanoid.CombatState de CADA personaje
+	(CombatAnimations = poses de cuerpo completo, CombatVisuals = estela, brillos, dash):
+	  Windup → carga + destello en la punta (rojo si es Heavy) · Attacking → tajo + estela
+	  Parrying → desvío + espada blanca · Blocking → guardia + contorno azul
+	  Stunned → tambaleo (retroceso si fue por parry) · PostureBroken → rodilla al piso + pulso rojo
+	  Dashing → inclinación, imágenes residuales, polvo y golpe de FOV.
 
 	"CombatFeedback" → número/texto, destello, sonido, hitstop (congela las animaciones de
 	atacante y objetivo) y, si el jugador local está involucrado, sacudida de cámara.
@@ -24,7 +28,6 @@
 local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
@@ -33,16 +36,24 @@ local Remotes = require(Shared:WaitForChild("Remotes"))
 local Util = script.Parent:WaitForChild("Util")
 local CombatAnimations = require(Util:WaitForChild("CombatAnimations"))
 local CombatEffects = require(Util:WaitForChild("CombatEffects"))
+local CombatVisuals = require(Util:WaitForChild("CombatVisuals"))
 
 -- Mantener iguales a CombatService (el servidor valida con sus propios valores).
 local COMBO_LENGTH = 3
 local DASH_COOLDOWN = 2
 local DASH_DURATION = 0.25
+local PARRY_WINDOW = 0.22
 
 -- Solo cliente
 local DASH_SPEED = 64 -- velocidad inicial del dash (studs/s)
 local DASH_MAX_ACCEL = 2000
 local FREE_STATES: { [string]: boolean } = { Idle = true, Blocking = true }
+local TRAIL_COLORS = { -- estela de la hoja por golpe del combo
+	Color3.fromRGB(235, 240, 255),
+	Color3.fromRGB(190, 225, 255),
+	Color3.fromRGB(255, 185, 80),
+}
+local SLASH_TRAIL_TIME = 0.2
 
 -- Hitstop (s) y sacudida de cámara (studs, s) por tipo de impacto
 local HITSTOP = {
@@ -142,45 +153,6 @@ local function getDashDirection(humanoid: Humanoid, root: BasePart): Vector3
 	return if rightAmount > 0 then right else -right
 end
 
--- ══════════════════ Física del dash (local: el cliente es dueño de su personaje) ══════════════════
-
-local function applyDashPhysics(root: BasePart, direction: Vector3)
-	local previous = root:FindFirstChild("CombatDash")
-	if previous then
-		previous:Destroy()
-	end
-
-	local attachment = Instance.new("Attachment")
-	attachment.Name = "CombatDash"
-
-	local mover = Instance.new("LinearVelocity")
-	mover.Attachment0 = attachment
-	mover.RelativeTo = Enum.ActuatorRelativeTo.World
-	mover.VelocityConstraintMode = Enum.VelocityConstraintMode.Plane -- Y libre: no vuela en rampas
-	mover.PrimaryTangentAxis = Vector3.xAxis
-	mover.SecondaryTangentAxis = Vector3.zAxis
-	mover.PlaneVelocity = Vector2.new(direction.X, direction.Z) * DASH_SPEED
-	mover.MaxForce = root.AssemblyMass * DASH_MAX_ACCEL
-	mover.Parent = attachment
-	attachment.Parent = root
-
-	local elapsed = 0
-	local connection: RBXScriptConnection? = nil
-	connection = RunService.Heartbeat:Connect(function(dt)
-		elapsed += dt
-		if elapsed >= DASH_DURATION or not attachment.Parent then
-			if connection then
-				connection:Disconnect()
-			end
-			attachment:Destroy()
-			return
-		end
-		-- Arranque explosivo y frenado por fricción (curva cuadrática).
-		local falloff = (1 - elapsed / DASH_DURATION) ^ 2
-		mover.PlaneVelocity = Vector2.new(direction.X, direction.Z) * (DASH_SPEED * falloff)
-	end)
-end
-
 -- ══════════════════ Acciones ══════════════════
 
 local function attack(attackEvent: RemoteEvent)
@@ -203,8 +175,8 @@ local function attack(attackEvent: RemoteEvent)
 end
 
 local function dash(attackEvent: RemoteEvent)
-	local _, humanoid, root = getLocalHumanoid()
-	if not humanoid or not root or not isFree(humanoid) then
+	local character, humanoid, root = getLocalHumanoid()
+	if not character or not humanoid or not root or not isFree(humanoid) then
 		return
 	end
 	local now = os.clock()
@@ -213,9 +185,13 @@ local function dash(attackEvent: RemoteEvent)
 	end
 	lastDashAt = now
 
+	local direction = getDashDirection(humanoid, root)
 	attackEvent:FireServer("Dash")
-	applyDashPhysics(root, getDashDirection(humanoid, root))
+	CombatEffects.DashMove(root, direction, DASH_SPEED, DASH_DURATION, DASH_MAX_ACCEL)
 	CombatEffects.PlaySound("Dash", root)
+	-- Visual inmediato para el jugador local (los demás lo ven al llegar el estado "Dashing").
+	CombatAnimations.PlayDash(character, root.CFrame:VectorToObjectSpace(direction), DASH_DURATION)
+	CombatVisuals.Dash(character, direction, DASH_DURATION)
 end
 
 local function bindActions(attackEvent: RemoteEvent)
@@ -274,29 +250,58 @@ local function hookWeaponTool(child: Instance, attackEvent: RemoteEvent)
 	end
 end
 
--- ══════════════════ Animaciones por estado (todos los personajes) ══════════════════
+-- ══════════════════ Animaciones y efectos por estado (todos los personajes) ══════════════════
+
+local function hasWeaponTool(character: Model): boolean
+	local tool = character:FindFirstChildOfClass("Tool")
+	return tool ~= nil and tool:GetAttribute("WeaponId") ~= nil
+end
 
 local function onCombatState(player: Player, character: Model, humanoid: Humanoid, previous: string?)
 	local state = humanoid:GetAttribute("CombatState")
 	local step = humanoid:GetAttribute("ComboStep")
 	local combo = if typeof(step) == "number" and step >= 1 then step else 1
+	local weapon = weaponOf(player)
+
+	-- Apagar efectos del estado anterior.
+	if (previous == "Blocking" or previous == "Parrying") and state ~= "Blocking" and state ~= "Parrying" then
+		CombatVisuals.SetGuardGlow(character, false)
+	end
+	if previous == "PostureBroken" and state ~= "PostureBroken" then
+		CombatVisuals.SetBrokenPulse(character, false)
+	end
 
 	if state == "Windup" then
-		CombatAnimations.SetGuard(character, false)
-		CombatAnimations.PlayWindup(character, combo, weaponOf(player).WindupTime)
+		CombatAnimations.PlayWindup(character, combo, weapon.WindupTime)
+		CombatVisuals.WindupGlint(character, weapon.Weight == "Heavy")
 	elseif state == "Attacking" then
-		CombatAnimations.PlaySlash(character, combo)
+		CombatAnimations.PlaySlash(character, combo, weapon.Weight)
+		CombatVisuals.SlashTrail(character, TRAIL_COLORS[combo] or TRAIL_COLORS[1], SLASH_TRAIL_TIME)
 		CombatEffects.PlaySound(if combo == COMBO_LENGTH then "Heavy" else "Swing", humanoid.RootPart)
-	elseif state == "Parrying" or state == "Blocking" then
-		CombatAnimations.SetGuard(character, true)
-	elseif state == "Stunned" or state == "PostureBroken" then
-		CombatAnimations.Stagger(character, state == "PostureBroken")
-	else
-		-- Idle / Recovery / Dashing / Dead
-		CombatAnimations.SetGuard(character, false)
-		if previous == "Stunned" or previous == "PostureBroken" or previous == "Windup" then
-			CombatAnimations.Reset(character)
+	elseif state == "Parrying" then
+		CombatAnimations.SetMode(character, "Parry")
+		CombatVisuals.ParryWindow(character, PARRY_WINDOW)
+	elseif state == "Blocking" then
+		CombatAnimations.SetMode(character, "Block")
+		CombatVisuals.SetGuardGlow(character, true)
+	elseif state == "Stunned" then
+		CombatAnimations.SetMode(character, "Stunned")
+	elseif state == "PostureBroken" then
+		CombatAnimations.SetMode(character, "Broken")
+		CombatVisuals.SetBrokenPulse(character, true)
+	elseif state == "Dashing" then
+		local root = humanoid.RootPart
+		CombatAnimations.SetMode(character, "None")
+		if root and player ~= localPlayer then -- el local ya lo mostró al apretar Q
+			local velocity = flat(root.AssemblyLinearVelocity)
+			local direction = if velocity.Magnitude > 2 then velocity.Unit else -flat(root.CFrame.LookVector).Unit
+			CombatAnimations.PlayDash(character, root.CFrame:VectorToObjectSpace(direction), DASH_DURATION)
+			CombatVisuals.Dash(character, direction, DASH_DURATION)
 		end
+	elseif state == "Dead" or previous == "Windup" then
+		CombatAnimations.Reset(character) -- muerte o ataque cancelado sin pasar por otro estado
+	else
+		CombatAnimations.SetMode(character, "None") -- Idle / Recovery
 	end
 end
 
@@ -311,6 +316,22 @@ local function watchCharacter(player: Player, character: Model)
 		local state = humanoid:GetAttribute("CombatState")
 		previous = if typeof(state) == "string" then state else nil
 	end)
+
+	-- Pose "Listo" con el arma en la mano.
+	local function refreshArmed()
+		CombatAnimations.SetArmed(character, hasWeaponTool(character))
+	end
+	character.ChildAdded:Connect(function(child)
+		if child:IsA("Tool") then
+			task.defer(refreshArmed)
+		end
+	end)
+	character.ChildRemoved:Connect(function(child)
+		if child:IsA("Tool") then
+			refreshArmed()
+		end
+	end)
+	refreshArmed()
 end
 
 local function watchPlayer(player: Player)
@@ -327,6 +348,13 @@ end
 local function rootOf(model: Model?): BasePart?
 	local humanoid = if model then model:FindFirstChildOfClass("Humanoid") else nil
 	return if humanoid then humanoid.RootPart else nil
+end
+
+local function midpoint(a: BasePart?, b: BasePart?, fallback: Model): Vector3
+	if a and b then
+		return (a.Position + b.Position) / 2 + Vector3.new(0, 1, 0)
+	end
+	return if b then b.Position else fallback:GetPivot().Position
 end
 
 local function hitstop(duration: number, attackerCharacter: Model?, target: Model)
@@ -360,12 +388,12 @@ local function onFeedback(payload: any)
 		CombatEffects.Popup(target, "¡Esquivado!", colors.Info)
 		return
 	elseif kind == "Parry" then
-		local attackerRoot = rootOf(attackerCharacter)
-		local midpoint = if attackerRoot and targetRoot
-			then (attackerRoot.Position + targetRoot.Position) / 2 + Vector3.new(0, 1, 0)
-			elseif targetRoot then targetRoot.Position
-			else target:GetPivot().Position
-		CombatEffects.ParrySpark(midpoint)
+		CombatEffects.ParrySpark(midpoint(rootOf(attackerCharacter), targetRoot, target))
+		CombatAnimations.PlayImpact(target, "ParryFlick")
+		local attackerHumanoid = if attackerCharacter then attackerCharacter:FindFirstChildOfClass("Humanoid") else nil
+		if attackerCharacter and attackerHumanoid and attackerHumanoid:GetAttribute("CombatState") ~= "PostureBroken" then
+			CombatAnimations.PlayRecoil(attackerCharacter)
+		end
 		CombatEffects.Popup(target, "¡PARRY!", colors.Parry, true)
 		CombatEffects.PlaySound("Parry", targetRoot)
 		hitstop(HITSTOP.Parry, attackerCharacter, target)
@@ -373,6 +401,8 @@ local function onFeedback(payload: any)
 	elseif kind == "Blocked" then
 		CombatEffects.Flash(target, colors.Blocked)
 		CombatEffects.Popup(target, "Bloqueado", colors.Blocked)
+		CombatAnimations.PlayImpact(target, "BlockJolt")
+		CombatVisuals.HitSpark(midpoint(rootOf(attackerCharacter), targetRoot, target), colors.Blocked, 14)
 		CombatEffects.PlaySound("Block", targetRoot)
 		hitstop(HITSTOP.Blocked, attackerCharacter, target)
 		shakeKey = "Blocked"
@@ -384,12 +414,16 @@ local function onFeedback(payload: any)
 		shakeKey = "GuardBreak"
 	else
 		CombatEffects.Flash(target, colors.Hit)
+		if targetRoot then
+			CombatVisuals.HitSpark(targetRoot.Position + Vector3.new(0, 0.5, 0), colors.Hit, if finisher then 18 else 10)
+		end
 		CombatEffects.Popup(target, `-{damage}`, if finisher then colors.Finisher else colors.Damage, finisher or payload.Killed == true)
 		CombatEffects.PlaySound(if finisher then "Heavy" else "Hit", targetRoot)
 		if payload.Interrupted == true then
 			CombatEffects.Popup(target, "¡Interrumpido!", colors.Info)
 		elseif payload.Hyperarmor == true then
 			CombatEffects.Popup(target, "Hyperarmor", colors.Finisher)
+			CombatAnimations.PlayImpact(target, "Flinch")
 		end
 		hitstop(if finisher then HITSTOP.Finisher else HITSTOP.Hit, attackerCharacter, target)
 		shakeKey = if finisher then "Finisher" else "Hit"
