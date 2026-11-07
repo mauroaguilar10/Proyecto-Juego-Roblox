@@ -7,7 +7,8 @@
 	  más vida, más daño y más oro por baja. Si la mazmorra queda vacía un rato, vuelve a la oleada 1.
 	- IA (servidor): cada guardián persigue al jugador vivo más cercano dentro de la sala
 	  y lo golpea cuerpo a cuerpo con un aviso previo (se ilumina antes de pegar).
-	- Barra de vida (BillboardGui) sobre cada guardián.
+	- Barra de vida: la dibuja HealthBarController (cliente, Combat) con el nombre del Model,
+	  que incluye la oleada ("Guardián · Oleada N").
 
 	Attributes que LEE: Humanoid.CombatState ("Stunned" frena al guardián), Humanoid.LastAttacker
 	(recompensa), Player.InDuel.
@@ -92,51 +93,6 @@ local function notifyArena(message: string)
 	end
 end
 
-local function healthBar(humanoid: Humanoid, head: BasePart, title: string)
-	local gui = Instance.new("BillboardGui")
-	gui.Name = "HealthBar"
-	gui.Size = UDim2.fromScale(4, 0.9)
-	gui.StudsOffset = Vector3.new(0, 1.9, 0)
-	gui.MaxDistance = 80
-	gui.Adornee = head
-
-	local label = Instance.new("TextLabel")
-	label.BackgroundTransparency = 1
-	label.Size = UDim2.fromScale(1, 0.5)
-	label.Font = Enum.Font.GothamBold
-	label.TextScaled = true
-	label.TextColor3 = Color3.new(1, 1, 1)
-	label.TextStrokeTransparency = 0.4
-	label.Text = title
-	label.Parent = gui
-
-	local back = Instance.new("Frame")
-	back.Position = UDim2.fromScale(0, 0.55)
-	back.Size = UDim2.fromScale(1, 0.4)
-	back.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-	back.BorderSizePixel = 0
-	back.Parent = gui
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0.5, 0)
-	corner.Parent = back
-
-	local fill = Instance.new("Frame")
-	fill.Size = UDim2.fromScale(1, 1)
-	fill.BorderSizePixel = 0
-	fill.Parent = back
-	corner:Clone().Parent = fill
-
-	local function update()
-		local ratio = math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)
-		fill.Size = UDim2.fromScale(ratio, 1)
-		fill.BackgroundColor3 = Color3.fromRGB(220, 60, 50):Lerp(Color3.fromRGB(80, 210, 90), ratio)
-		gui.Enabled = humanoid.Health > 0
-	end
-	humanoid.HealthChanged:Connect(update)
-	update()
-	gui.Parent = head
-end
-
 local function reward(humanoid: Humanoid, gold: number)
 	local attacker = humanoid:GetAttribute("LastAttacker")
 	if typeof(attacker) ~= "number" or attacker == 0 or attacker % 1 ~= 0 then return end
@@ -175,7 +131,7 @@ end
 
 local function spawnEnemy(parent: Instance, position: Vector3, stats: WaveStats, token: number)
 	local model = Instance.new("Model")
-	model.Name = "Guardián de piedra"
+	model.Name = `Guardián · Oleada {wave}` -- HealthBarController (cliente) muestra este nombre con la barra
 	-- El torso apoya en el piso; el root flota HipHeight por encima para que el Humanoid camine.
 	local root = part(model, "HumanoidRootPart", position, Vector3.new(2, 2, 1), Color3.new())
 	root.Transparency = 1
@@ -204,7 +160,6 @@ local function spawnEnemy(parent: Instance, position: Vector3, stats: WaveStats,
 	humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
 	humanoid.BreakJointsOnDeath = false
 	humanoid.Parent = model
-	healthBar(humanoid, head, `Guardián · Oleada {wave}`)
 
 	local enemy: Enemy = {
 		model = model, humanoid = humanoid, root = root, torso = torso,

@@ -8,6 +8,7 @@
 	  2. Cliente B → "DuelResponse"(A, accepted) → si acepta, empieza el duelo
 	  3. Arena generada por código (una por duelo) → "Countdown" → "Fight" → "End"
 	  Fin: muerte (Defeat), salida del juego / reset del personaje (Forfeit) o tiempo (Timeout = empate).
+	Revancha: si A desafía a B mientras B tiene un desafío pendiente de A, el duelo empieza directo.
 
 	Attributes que ESCRIBE: Player.InDuel (boolean). Es true desde la cuenta regresiva hasta el fin.
 	Payload de "DuelStateChanged": ver DuelStatePayload (documentado en ARCHITECTURE.md).
@@ -36,9 +37,10 @@ type Invite = {
 }
 
 export type DuelStatePayload = {
-	State: "InviteSent" | "Declined" | "Countdown" | "Fight" | "End",
+	State: "InviteSent" | "Declined" | "Unavailable" | "Countdown" | "Fight" | "End",
 	Opponent: Player?,
 	Seconds: number?, -- solo en "Countdown"
+	EndsAt: number?, -- solo en "Fight": workspace:GetServerTimeNow() en que termina por tiempo
 	Winner: Player?, -- solo en "End" (nil = empate)
 	Reason: EndReason?, -- solo en "End"
 }
@@ -251,8 +253,9 @@ local function startDuel(a: Player, b: Player)
 			return
 		end
 		duel.phase = "Fighting"
+		local endsAt = workspace:GetServerTimeNow() + DUEL_TIMEOUT
 		for _, player in duel.players do
-			sendState(player, { State = "Fight", Opponent = otherPlayer(duel, player) })
+			sendState(player, { State = "Fight", Opponent = otherPlayer(duel, player), EndsAt = endsAt })
 		end
 	end)
 
@@ -276,6 +279,15 @@ local function onDuelRequest(challenger: Player, target: unknown)
 	lastRequestAt[challenger] = now
 
 	if not isAvailable(challenger) or not isAvailable(target) then
+		sendState(challenger, { State = "Unavailable", Opponent = target })
+		return
+	end
+
+	-- Desafío cruzado (p. ej. los dos pidieron revancha): empieza sin esperar respuesta.
+	local reverse = invites[challenger]
+	if reverse and reverse.from == target and reverse.expiresAt > now then
+		invites[challenger] = nil
+		startDuel(target, challenger)
 		return
 	end
 

@@ -1,4 +1,4 @@
-# ARCHITECTURE
+﻿# ARCHITECTURE
 
 Juego de **Duelos 1v1** + **farmeo en Mazmorras** + **Tienda de armas**.
 Stack: Luau `--!strict`, Rojo 7.3+ (archivos `.luau`).
@@ -43,6 +43,9 @@ El **escritor** es el único que puede hacer `SetAttribute`. Los demás solo lee
 | `InDuel`         | `Player`                                | `boolean` | `true` durante un duelo (incluye cuenta regresiva) | `ArenaService` (A)           | `ShopService`, `DungeonService`, `UIController` |
 | `CombatState`    | `Humanoid` (jugadores y enemigos)       | `string`  | `"Idle"` \| `"Attacking"` \| `"Stunned"` \| `"Dead"` | `CombatService` (A)          | `CombatController`, `UIController`, `DungeonService` |
 | `LastAttacker`   | `Humanoid` de enemigos de mazmorra      | `number`  | `UserId` del último jugador que golpeó (0 = nadie) | `CombatService` (A)          | `DungeonService` (recompensa en oro) |
+| `Stamina`        | `Humanoid` de jugadores                 | `number`  | `0..100` (aguante para bloquear y esquivar)       | `CombatService` (A)          | `CombatController`, `HealthBarController` |
+| `Blocking`       | `Humanoid` de jugadores                 | `boolean` | `true` mientras bloquea                           | `CombatService` (A)          | `CombatController` |
+| `ComboStep`      | `Humanoid` de jugadores                 | `number`  | `1..3`, golpe del combo en curso (0 = ninguno)    | `CombatService` (A)          | `CombatController` |
 
 **Garantías**
 
@@ -64,6 +67,19 @@ El **escritor** es el único que puede hacer `SetAttribute`. Los demás solo lee
   (Attribute `WeaponId`) del arma de `EquippedWeapon`; se saca/guarda desde la barra de Roblox.
   Solo se ataca con ella en la mano (`WeaponVisualService.IsWeaponHeld`). No crear otras Tools de arma.
 
+- **Bloqueo / esquive / combo.** Bloquear (solo golpes de frente) reduce el daño y gasta
+  `Stamina`; en los primeros 0,2 s es un *parry* (0 daño, atacante aturdido). Sin aguante → guardia rota.
+  Esquivar da invulnerabilidad breve. El 3.er golpe del combo hace ×1,5 de daño y empuja más.
+  Mientras bloquea, `CombatService` baja temporalmente `Humanoid.WalkSpeed` y lo restaura al soltar.
+
+**Remotes de combate**
+
+- `CombatAttack` (C→S): primer argumento = acción. `()` o `("Attack")` atacar,
+  `("Block", boolean)` empezar/soltar bloqueo, `("Dash")` esquivar.
+- `CombatFeedback` (S→C, al atacante y a la víctima): `{ Kind: "Hit" | "Blocked" | "Parry" | "GuardBreak",
+  Attacker: Player, Target: Model, Damage: number, Killed: boolean, WeaponId: string, Combo: number,
+  Knockback: Vector3? }` (`Knockback` solo en el payload que recibe la víctima).
+
 **Remotes de duelo (para la UI de Economy)**
 
 `DuelController` (Combat) muestra notificaciones nativas mínimas. La UI definitiva puede
@@ -72,8 +88,9 @@ escuchar los mismos eventos sin tocar Combat:
 - `DuelInvite` (S→C): `(challenger: Player)`. Responder con
   `DuelResponse:FireServer(challenger, accepted: boolean)`.
 - `DuelStateChanged` (S→C): `payload` con
-  `State: "InviteSent" | "Declined" | "Countdown" | "Fight" | "End"`, `Opponent: Player?`,
-  `Seconds: number?` (Countdown), `Winner: Player?` (End; `nil` = empate) y
+  `State: "InviteSent" | "Declined" | "Unavailable" | "Countdown" | "Fight" | "End"`, `Opponent: Player?`,
+  `Seconds: number?` (Countdown), `EndsAt: number?` (Fight; `workspace:GetServerTimeNow()` del fin por tiempo),
+  `Winner: Player?` (End; `nil` = empate) y
   `Reason: "Defeat" | "Forfeit" | "Timeout"?` (End).
 
 ## 4. Contrato de módulos
