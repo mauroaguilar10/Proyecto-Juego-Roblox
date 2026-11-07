@@ -41,10 +41,9 @@ El **escritor** es el único que puede hacer `SetAttribute`. Los demás solo lee
 | `Gold`           | `Player`                                | `number`  | entero ≥ 0                                       | `DataService` (B)            | `UIController`, `ShopService`    |
 | `EquippedWeapon` | `Player`                                | `string`  | clave válida de `WeaponData.Weapons`             | `ShopService` / `DataService` (B) | `CombatService`, `CombatController`, `UIController` |
 | `InDuel`         | `Player`                                | `boolean` | `true` durante un duelo (incluye cuenta regresiva) | `ArenaService` (A)           | `ShopService`, `DungeonService`, `UIController` |
-| `CombatState`    | `Humanoid` (jugadores y enemigos)       | `string`  | `"Idle"` \| `"Attacking"` \| `"Stunned"` \| `"Dead"` | `CombatService` (A)          | `CombatController`, `UIController`, `DungeonService` |
+| `CombatState`    | `Humanoid` (jugadores y enemigos)       | `string`  | Jugadores: `"Idle"` \| `"Windup"` \| `"Attacking"` \| `"Recovery"` \| `"Parrying"` \| `"Blocking"` \| `"PostureBroken"` \| `"Stunned"` \| `"Dashing"` \| `"Dead"`. Enemigos: solo `"Idle"` \| `"Stunned"` \| `"Dead"` | `CombatService` (A)          | `CombatController`, `UIController`, `DungeonService` |
 | `LastAttacker`   | `Humanoid` de enemigos de mazmorra      | `number`  | `UserId` del último jugador que golpeó (0 = nadie) | `CombatService` (A)          | `DungeonService` (recompensa en oro) |
-| `Stamina`        | `Humanoid` de jugadores                 | `number`  | `0..100` (aguante para bloquear y esquivar)       | `CombatService` (A)          | `CombatController`, `HealthBarController` |
-| `Blocking`       | `Humanoid` de jugadores                 | `boolean` | `true` mientras bloquea                           | `CombatService` (A)          | `CombatController` |
+| `Posture`        | `Humanoid` de jugadores                 | `number`  | `0..100`; sube al bloquear/ser desviado, 100 = guardia rota | `CombatService` (A)          | `CombatController`, `HealthBarController` |
 | `ComboStep`      | `Humanoid` de jugadores                 | `number`  | `1..3`, golpe del combo en curso (0 = ninguno)    | `CombatService` (A)          | `CombatController` |
 | `Wave`           | `workspace.Mazmorra.Sala_<UserId>`      | `number`  | oleada actual (0 = todavía ninguna)               | `DungeonService` (B)         | `UIController` |
 | `EnemiesLeft`    | `workspace.Mazmorra.Sala_<UserId>`      | `number`  | guardianes vivos de la oleada                     | `DungeonService` (B)         | `UIController` |
@@ -95,18 +94,26 @@ torres, estatua, herrería, campamento, arena de duelos decorativa y el puesto d
   (Attribute `WeaponId`) del arma de `EquippedWeapon`; se saca/guarda desde la barra de Roblox.
   Solo se ataca con ella en la mano (`WeaponVisualService.IsWeaponHeld`). No crear otras Tools de arma.
 
-- **Bloqueo / esquive / combo.** Bloquear (solo golpes de frente) reduce el daño y gasta
-  `Stamina`; en los primeros 0,2 s es un *parry* (0 daño, atacante aturdido). Sin aguante → guardia rota.
-  Esquivar da invulnerabilidad breve. El 3.er golpe del combo hace ×1,5 de daño y empuja más.
-  Mientras bloquea, `CombatService` baja temporalmente `Humanoid.WalkSpeed` y lo restaura al soltar.
+- **Ataque con compromiso.** Cada golpe es `Windup` (`WeaponData.WindupTime`) → `Attacking` (0,1 s,
+  paso hacia adelante) → `Recovery` (`RecoveryTime`; más corta si conecta). Golpear a alguien en
+  `Windup` lo interrumpe, salvo arma `Heavy` en sus últimos 0,15 s (hyperarmor).
+- **Parry y postura.** Mantener F: los primeros 0,22 s son `Parrying`, después `Blocking`.
+  Parry de frente → 0 daño, el atacante suma 35 de `Posture` y queda `Stunned` 1,1 s. Bloquear de frente
+  → 0 daño y el defensor suma `PostureDamage`; con `Posture` 100 → `PostureBroken` 2 s (recibe ×1,5).
+  Tocar F sin desviar nada pone el parry en cooldown 1,2 s. La postura baja sola tras 3 s sin bloquear ni recibir golpes.
+- **Dash** (Q): 0,25 s, i-frames los primeros 0,12 s, cooldown 2 s. El 3.er golpe del combo hace ×1,5.
+- **Movilidad.** `CombatService` es dueño de `WalkSpeed`, `JumpPower`/`JumpHeight` y `AutoRotate` de los
+  personajes de jugadores: los guarda al aparecer y los ajusta según `CombatState`. Otro sistema que
+  necesite cambiarlos debe coordinarlo con Combat. Los empujes usan `CombatService.ApplyPhysicalImpulse`
+  (`LinearVelocity` en el plano XZ; nunca BodyMovers deprecados).
 
 **Remotes de combate**
 
-- `CombatAttack` (C→S): primer argumento = acción. `()` o `("Attack")` atacar,
-  `("Block", boolean)` empezar/soltar bloqueo, `("Dash")` esquivar.
-- `CombatFeedback` (S→C, al atacante y a la víctima): `{ Kind: "Hit" | "Blocked" | "Parry" | "GuardBreak",
+- `CombatAttack` (C→S): primer argumento = acción. `()` o `("Attack", aim: Vector3?)` atacar,
+  `("Block", boolean)` mantener/soltar F, `("Dash")` esquivar.
+- `CombatFeedback` (S→C, a los jugadores a ≤150 studs): `{ Kind: "Hit" | "Blocked" | "Parry" | "GuardBreak" | "Dodge",
   Attacker: Player, Target: Model, Damage: number, Killed: boolean, WeaponId: string, Combo: number,
-  Knockback: Vector3? }` (`Knockback` solo en el payload que recibe la víctima).
+  Interrupted: boolean, Hyperarmor: boolean, Intensity: number }` (`Intensity` 0..1 para hitstop/cámara).
 
 **Remotes de duelo (para la UI de Economy)**
 

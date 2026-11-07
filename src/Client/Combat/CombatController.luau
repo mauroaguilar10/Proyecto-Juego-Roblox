@@ -1,23 +1,30 @@
 --!strict
 --[[
-	CombatController — Input de combate y feedback de golpes.
+	CombatController — Input de combate y feedback visceral en el cliente.
 	Owner: Dev A (Combat).
 
 	El arma es una Tool de inventario (ver WeaponVisualService). Con ella en la mano:
-	  - Atacar:   Tool.Activated (click izquierdo / toque / R2) → CombatAttack("Attack", aim)
-	              (gira al personaje hacia el cursor/toque, o la cámara con gamepad)
-	  - Bloquear: mantener F / L2 / botón táctil              → CombatAttack("Block", true/false)
-	  - Esquivar: Q / L1 / botón táctil                        → CombatAttack("Dash")
-	Cooldowns, combo y aguante se predicen en el cliente solo para responder al instante;
-	el servidor (CombatService) es quien valida.
+	  - Atacar:   Tool.Activated (click / toque / R2) → CombatAttack("Attack", aim)
+	              Gira al personaje hacia el cursor/toque (o la cámara con gamepad).
+	  - Guardia:  mantener F / L2 / botón táctil → CombatAttack("Block", true/false)
+	              Los primeros 0,22 s son parry; soltar sin desviar nada pone el parry en cooldown.
+	  - Dash:     Q / L1 / botón táctil → CombatAttack("Dash"). Dirección relativa a la cámara
+	              (adelante/atrás/izquierda/derecha; sin input = atrás). Física local con curva
+	              explosiva que decae en 0,25 s; el servidor da los i-frames.
+	El servidor (CombatService) valida todo. Acá solo se predicen cooldowns para no spamear.
 
-	Remotes "CombatFeedback" → números de daño, destellos, sonidos y empuje (CombatEffects).
-	Animaciones procedurales del brazo: CombatAnimations (para todos los personajes).
+	Animaciones: se disparan con Humanoid.CombatState de CADA personaje (Windup → carga,
+	Attacking → tajo, Parrying/Blocking → guardia, Stunned/PostureBroken → tambaleo).
+
+	"CombatFeedback" → número/texto, destello, sonido, hitstop (congela las animaciones de
+	atacante y objetivo) y, si el jugador local está involucrado, sacudida de cámara.
+	Parry: destello de luz + chispas en el punto medio. Guard break: efecto rojo intenso.
 ]]
 
 local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
@@ -29,14 +36,29 @@ local CombatEffects = require(Util:WaitForChild("CombatEffects"))
 
 -- Mantener iguales a CombatService (el servidor valida con sus propios valores).
 local COMBO_LENGTH = 3
-local COMBO_WINDOW = 0.6
-local DASH_COST = 25
-local DASH_COOLDOWN = 1
-local KNOCKBACK_DURATION = 0.15
+local DASH_COOLDOWN = 2
+local DASH_DURATION = 0.25
 
 -- Solo cliente
-local DASH_SPEED = 60
-local DASH_DURATION = 0.18
+local DASH_SPEED = 64 -- velocidad inicial del dash (studs/s)
+local DASH_MAX_ACCEL = 2000
+local FREE_STATES: { [string]: boolean } = { Idle = true, Blocking = true }
+
+-- Hitstop (s) y sacudida de cámara (studs, s) por tipo de impacto
+local HITSTOP = {
+	Hit = 0.06,
+	Finisher = 0.09,
+	Blocked = 0.04,
+	Parry = 0.14,
+	GuardBreak = 0.12,
+}
+local SHAKE: { [string]: { number } } = {
+	Hit = { 0.22, 0.18 },
+	Finisher = { 0.38, 0.25 },
+	Blocked = { 0.1, 0.12 },
+	Parry = { 0.6, 0.3 },
+	GuardBreak = { 0.7, 0.4 },
+}
 
 local ACTION_BLOCK = "CombatBlock"
 local ACTION_DASH = "CombatDash"
@@ -44,12 +66,15 @@ local ACTION_DASH = "CombatDash"
 local localPlayer = Players.LocalPlayer
 local lastAttackAt = -math.huge
 local lastDashAt = -math.huge
-local combo = 0
 local hookedTools: { [Tool]: boolean } = setmetatable({}, { __mode = "k" }) :: any
 
 local CombatController = {}
 
--- ── Estado local ──
+-- ══════════════════ Helpers ══════════════════
+
+local function flat(vector: Vector3): Vector3
+	return Vector3.new(vector.X, 0, vector.Z)
+end
 
 local function getLocalHumanoid(): (Model?, Humanoid?, BasePart?)
 	local character = localPlayer.Character
@@ -63,16 +88,11 @@ end
 
 local function isFree(humanoid: Humanoid): boolean
 	local state = humanoid:GetAttribute("CombatState")
-	return state ~= "Stunned" and state ~= "Dead" and humanoid:GetAttribute("Blocking") ~= true
+	return typeof(state) == "string" and FREE_STATES[state] == true
 end
 
-local function getStamina(humanoid: Humanoid): number
-	local value = humanoid:GetAttribute("Stamina")
-	return if typeof(value) == "number" then value else 0
-end
-
-local function getWeapon(): WeaponData.WeaponStats
-	local equipped = localPlayer:GetAttribute("EquippedWeapon")
+local function weaponOf(player: Player?): WeaponData.WeaponStats
+	local equipped = if player then player:GetAttribute("EquippedWeapon") else nil
 	return WeaponData.GetOrDefault(if typeof(equipped) == "string" then equipped else nil)
 end
 
@@ -96,24 +116,82 @@ local function getAimDirection(root: BasePart): Vector3?
 			direction = ray.Direction
 		end
 	end
-	local flat = Vector3.new(direction.X, 0, direction.Z)
-	return if flat.Magnitude > 0.1 then flat.Unit else nil
+	local horizontal = flat(direction)
+	return if horizontal.Magnitude > 0.1 then horizontal.Unit else nil
 end
 
--- ── Acciones ──
+-- Dirección del dash relativa a la cámara, ajustada a 4 ejes. Sin input: hacia atrás.
+local function getDashDirection(humanoid: Humanoid, root: BasePart): Vector3
+	local camera = workspace.CurrentCamera
+	local look = flat(if camera then camera.CFrame.LookVector else root.CFrame.LookVector)
+	if look.Magnitude < 0.1 then
+		look = flat(root.CFrame.LookVector)
+	end
+	look = look.Unit
+	local right = Vector3.new(-look.Z, 0, look.X)
+
+	local move = flat(humanoid.MoveDirection)
+	if move.Magnitude < 0.1 then
+		return -look
+	end
+	local forwardAmount = move:Dot(look)
+	local rightAmount = move:Dot(right)
+	if math.abs(forwardAmount) >= math.abs(rightAmount) then
+		return if forwardAmount > 0 then look else -look
+	end
+	return if rightAmount > 0 then right else -right
+end
+
+-- ══════════════════ Física del dash (local: el cliente es dueño de su personaje) ══════════════════
+
+local function applyDashPhysics(root: BasePart, direction: Vector3)
+	local previous = root:FindFirstChild("CombatDash")
+	if previous then
+		previous:Destroy()
+	end
+
+	local attachment = Instance.new("Attachment")
+	attachment.Name = "CombatDash"
+
+	local mover = Instance.new("LinearVelocity")
+	mover.Attachment0 = attachment
+	mover.RelativeTo = Enum.ActuatorRelativeTo.World
+	mover.VelocityConstraintMode = Enum.VelocityConstraintMode.Plane -- Y libre: no vuela en rampas
+	mover.PrimaryTangentAxis = Vector3.xAxis
+	mover.SecondaryTangentAxis = Vector3.zAxis
+	mover.PlaneVelocity = Vector2.new(direction.X, direction.Z) * DASH_SPEED
+	mover.MaxForce = root.AssemblyMass * DASH_MAX_ACCEL
+	mover.Parent = attachment
+	attachment.Parent = root
+
+	local elapsed = 0
+	local connection: RBXScriptConnection? = nil
+	connection = RunService.Heartbeat:Connect(function(dt)
+		elapsed += dt
+		if elapsed >= DASH_DURATION or not attachment.Parent then
+			if connection then
+				connection:Disconnect()
+			end
+			attachment:Destroy()
+			return
+		end
+		-- Arranque explosivo y frenado por fricción (curva cuadrática).
+		local falloff = (1 - elapsed / DASH_DURATION) ^ 2
+		mover.PlaneVelocity = Vector2.new(direction.X, direction.Z) * (DASH_SPEED * falloff)
+	end)
+end
+
+-- ══════════════════ Acciones ══════════════════
 
 local function attack(attackEvent: RemoteEvent)
-	local character, humanoid, root = getLocalHumanoid()
-	if not character or not humanoid or not root or not isFree(humanoid) then
+	local _, humanoid, root = getLocalHumanoid()
+	if not humanoid or not root or not isFree(humanoid) then
 		return
 	end
-
-	local weapon = getWeapon()
 	local now = os.clock()
-	if now - lastAttackAt < weapon.AttackCooldown then
+	if now - lastAttackAt < weaponOf(localPlayer).AttackCooldown then
 		return
 	end
-	combo = if now - lastAttackAt <= weapon.AttackCooldown + COMBO_WINDOW then combo % COMBO_LENGTH + 1 else 1
 	lastAttackAt = now
 
 	local aim = getAimDirection(root)
@@ -122,8 +200,6 @@ local function attack(attackEvent: RemoteEvent)
 		root.CFrame = CFrame.lookAt(root.Position, root.Position + aim)
 	end
 	attackEvent:FireServer("Attack", aim)
-	CombatAnimations.PlaySwing(character, combo)
-	CombatEffects.PlaySound(if combo == COMBO_LENGTH then "Heavy" else "Swing", root)
 end
 
 local function dash(attackEvent: RemoteEvent)
@@ -132,20 +208,14 @@ local function dash(attackEvent: RemoteEvent)
 		return
 	end
 	local now = os.clock()
-	if now - lastDashAt < DASH_COOLDOWN or getStamina(humanoid) < DASH_COST then
+	if now - lastDashAt < DASH_COOLDOWN then
 		return
 	end
 	lastDashAt = now
 
-	local direction = humanoid.MoveDirection
-	if direction.Magnitude < 0.1 then
-		direction = root.CFrame.LookVector
-	end
-	direction = Vector3.new(direction.X, 0, direction.Z).Unit
-
 	attackEvent:FireServer("Dash")
-	CombatEffects.PushLocalCharacter(direction * DASH_SPEED, DASH_DURATION)
-	CombatEffects.PlaySound("Swing", root)
+	applyDashPhysics(root, getDashDirection(humanoid, root))
+	CombatEffects.PlaySound("Dash", root)
 end
 
 local function bindActions(attackEvent: RemoteEvent)
@@ -157,7 +227,7 @@ local function bindActions(attackEvent: RemoteEvent)
 		end
 		return Enum.ContextActionResult.Sink
 	end, true, Enum.KeyCode.F, Enum.KeyCode.ButtonL2)
-	ContextActionService:SetTitle(ACTION_BLOCK, "Bloquear")
+	ContextActionService:SetTitle(ACTION_BLOCK, "Guardia")
 	ContextActionService:SetPosition(ACTION_BLOCK, UDim2.new(1, -170, 1, -150))
 
 	ContextActionService:BindAction(ACTION_DASH, function(_, inputState: Enum.UserInputState)
@@ -166,14 +236,16 @@ local function bindActions(attackEvent: RemoteEvent)
 		end
 		return Enum.ContextActionResult.Sink
 	end, true, Enum.KeyCode.Q, Enum.KeyCode.ButtonL1)
-	ContextActionService:SetTitle(ACTION_DASH, "Esquivar")
+	ContextActionService:SetTitle(ACTION_DASH, "Dash")
 	ContextActionService:SetPosition(ACTION_DASH, UDim2.new(1, -230, 1, -90))
 end
 
-local function unbindActions(attackEvent: RemoteEvent)
+local function unbindActions(attackEvent: RemoteEvent?)
 	ContextActionService:UnbindAction(ACTION_BLOCK)
 	ContextActionService:UnbindAction(ACTION_DASH)
-	attackEvent:FireServer("Block", false)
+	if attackEvent then
+		attackEvent:FireServer("Block", false)
+	end
 end
 
 -- Conecta la Tool del arma (Attribute "WeaponId") una sola vez por Tool.
@@ -202,30 +274,42 @@ local function hookWeaponTool(child: Instance, attackEvent: RemoteEvent)
 	end
 end
 
--- ── Personajes (animaciones de todos) ──
+-- ══════════════════ Animaciones por estado (todos los personajes) ══════════════════
+
+local function onCombatState(player: Player, character: Model, humanoid: Humanoid, previous: string?)
+	local state = humanoid:GetAttribute("CombatState")
+	local step = humanoid:GetAttribute("ComboStep")
+	local combo = if typeof(step) == "number" and step >= 1 then step else 1
+
+	if state == "Windup" then
+		CombatAnimations.SetGuard(character, false)
+		CombatAnimations.PlayWindup(character, combo, weaponOf(player).WindupTime)
+	elseif state == "Attacking" then
+		CombatAnimations.PlaySlash(character, combo)
+		CombatEffects.PlaySound(if combo == COMBO_LENGTH then "Heavy" else "Swing", humanoid.RootPart)
+	elseif state == "Parrying" or state == "Blocking" then
+		CombatAnimations.SetGuard(character, true)
+	elseif state == "Stunned" or state == "PostureBroken" then
+		CombatAnimations.Stagger(character, state == "PostureBroken")
+	else
+		-- Idle / Recovery / Dashing / Dead
+		CombatAnimations.SetGuard(character, false)
+		if previous == "Stunned" or previous == "PostureBroken" or previous == "Windup" then
+			CombatAnimations.Reset(character)
+		end
+	end
+end
 
 local function watchCharacter(player: Player, character: Model)
 	local humanoid = character:WaitForChild("Humanoid", 10)
 	if not humanoid or not humanoid:IsA("Humanoid") then
 		return
 	end
-
-	humanoid:GetAttributeChangedSignal("Blocking"):Connect(function()
-		CombatAnimations.SetBlocking(character, humanoid:GetAttribute("Blocking") == true)
-	end)
-
-	-- El jugador local hace el swing al instante (predicción); el resto, cuando el servidor lo confirma.
-	if player == localPlayer then
-		return
-	end
+	local previous: string? = nil
 	humanoid:GetAttributeChangedSignal("CombatState"):Connect(function()
-		if humanoid:GetAttribute("CombatState") ~= "Attacking" then
-			return
-		end
-		local step = humanoid:GetAttribute("ComboStep")
-		local stepNumber = if typeof(step) == "number" then step else 1
-		CombatAnimations.PlaySwing(character, stepNumber)
-		CombatEffects.PlaySound(if stepNumber == COMBO_LENGTH then "Heavy" else "Swing", humanoid.RootPart)
+		onCombatState(player, character, humanoid, previous)
+		local state = humanoid:GetAttribute("CombatState")
+		previous = if typeof(state) == "string" then state else nil
 	end)
 end
 
@@ -238,7 +322,19 @@ local function watchPlayer(player: Player)
 	end
 end
 
--- ── Feedback de golpes ──
+-- ══════════════════ Feedback de impactos ══════════════════
+
+local function rootOf(model: Model?): BasePart?
+	local humanoid = if model then model:FindFirstChildOfClass("Humanoid") else nil
+	return if humanoid then humanoid.RootPart else nil
+end
+
+local function hitstop(duration: number, attackerCharacter: Model?, target: Model)
+	if attackerCharacter then
+		CombatAnimations.Freeze(attackerCharacter, duration)
+	end
+	CombatAnimations.Freeze(target, duration)
+end
 
 local function onFeedback(payload: any)
 	if typeof(payload) ~= "table" then
@@ -248,87 +344,95 @@ local function onFeedback(payload: any)
 	if typeof(target) ~= "Instance" or not target:IsA("Model") or not target.Parent then
 		return
 	end
+	local attacker = payload.Attacker
+	local attackerPlayer: Player? = if typeof(attacker) == "Instance" and attacker:IsA("Player") then attacker else nil
+	local attackerCharacter = if attackerPlayer then attackerPlayer.Character else nil
 
 	local colors = CombatEffects.Colors
-	local humanoid = target:FindFirstChildOfClass("Humanoid")
-	local at = if humanoid then humanoid.RootPart else nil
+	local targetRoot = rootOf(target)
 	local damage = if typeof(payload.Damage) == "number" then math.floor(payload.Damage + 0.5) else 0
 	local finisher = payload.Combo == COMBO_LENGTH
+	local involved = attackerPlayer == localPlayer or target == localPlayer.Character
 	local kind = payload.Kind
+	local shakeKey: string? = nil
 
-	if kind == "Parry" then
-		CombatEffects.Flash(target, colors.Parry)
-		CombatEffects.Popup(target, "¡Parry!", colors.Parry, true)
-		CombatEffects.PlaySound("Parry", at)
-		local attacker = payload.Attacker
-		if attacker == localPlayer then
-			combo = 0
-		end
+	if kind == "Dodge" then
+		CombatEffects.Popup(target, "¡Esquivado!", colors.Info)
+		return
+	elseif kind == "Parry" then
+		local attackerRoot = rootOf(attackerCharacter)
+		local midpoint = if attackerRoot and targetRoot
+			then (attackerRoot.Position + targetRoot.Position) / 2 + Vector3.new(0, 1, 0)
+			elseif targetRoot then targetRoot.Position
+			else target:GetPivot().Position
+		CombatEffects.ParrySpark(midpoint)
+		CombatEffects.Popup(target, "¡PARRY!", colors.Parry, true)
+		CombatEffects.PlaySound("Parry", targetRoot)
+		hitstop(HITSTOP.Parry, attackerCharacter, target)
+		shakeKey = "Parry"
 	elseif kind == "Blocked" then
 		CombatEffects.Flash(target, colors.Blocked)
-		CombatEffects.Popup(target, `-{damage} bloqueado`, colors.Blocked)
-		CombatEffects.PlaySound("Block", at)
+		CombatEffects.Popup(target, "Bloqueado", colors.Blocked)
+		CombatEffects.PlaySound("Block", targetRoot)
+		hitstop(HITSTOP.Blocked, attackerCharacter, target)
+		shakeKey = "Blocked"
 	elseif kind == "GuardBreak" then
-		CombatEffects.Flash(target, colors.GuardBreak)
-		CombatEffects.Popup(target, `¡Guardia rota! -{damage}`, colors.GuardBreak, true)
-		CombatEffects.PlaySound("Hit", at)
+		CombatEffects.GuardBreakBurst(target)
+		CombatEffects.Popup(target, "¡GUARDIA ROTA!", colors.GuardBreak, true)
+		CombatEffects.PlaySound("GuardBreak", targetRoot)
+		hitstop(HITSTOP.GuardBreak, attackerCharacter, target)
+		shakeKey = "GuardBreak"
 	else
 		CombatEffects.Flash(target, colors.Hit)
 		CombatEffects.Popup(target, `-{damage}`, if finisher then colors.Finisher else colors.Damage, finisher or payload.Killed == true)
-		CombatEffects.PlaySound(if finisher then "Heavy" else "Hit", at)
+		CombatEffects.PlaySound(if finisher then "Heavy" else "Hit", targetRoot)
+		if payload.Interrupted == true then
+			CombatEffects.Popup(target, "¡Interrumpido!", colors.Info)
+		elseif payload.Hyperarmor == true then
+			CombatEffects.Popup(target, "Hyperarmor", colors.Finisher)
+		end
+		hitstop(if finisher then HITSTOP.Finisher else HITSTOP.Hit, attackerCharacter, target)
+		shakeKey = if finisher then "Finisher" else "Hit"
 	end
 
-	if target == localPlayer.Character then
-		if kind ~= "Blocked" then
-			combo = 0 -- un golpe recibido corta tu combo (igual que en el servidor)
-		end
-		local knockback = payload.Knockback
-		if typeof(knockback) == "Vector3" then
-			CombatEffects.PushLocalCharacter(knockback, KNOCKBACK_DURATION)
-		end
+	if involved and shakeKey then
+		local shake = SHAKE[shakeKey]
+		CombatEffects.Shake(shake[1], shake[2])
 	end
 end
+
+-- ══════════════════ Init ══════════════════
 
 function CombatController:Init()
 	local attackEvent = Remotes.GetEvent("CombatAttack")
 	local feedbackEvent = Remotes.GetEvent("CombatFeedback")
 
-	-- La Tool se equipa moviéndose al personaje: basta con vigilar sus hijos.
-	local function watchOwnCharacter(character: Model)
-		character.ChildAdded:Connect(function(child)
+	-- La Tool se equipa moviéndose al personaje; también se vigila la mochila para
+	-- conectar Equipped antes del primer equipamiento.
+	local function watchContainer(container: Instance)
+		container.ChildAdded:Connect(function(child)
 			hookWeaponTool(child, attackEvent)
 		end)
-		for _, child in character:GetChildren() do
-			hookWeaponTool(child, attackEvent)
-		end
-		combo = 0
-	end
-	-- También en la mochila, para conectar Equipped antes del primer equipamiento.
-	local function watchBackpack(backpack: Instance)
-		backpack.ChildAdded:Connect(function(child)
-			hookWeaponTool(child, attackEvent)
-		end)
-		for _, child in backpack:GetChildren() do
+		for _, child in container:GetChildren() do
 			hookWeaponTool(child, attackEvent)
 		end
 	end
 	localPlayer.ChildAdded:Connect(function(child)
 		if child:IsA("Backpack") then
-			watchBackpack(child)
+			watchContainer(child)
 		end
 	end)
 	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
 	if backpack then
-		watchBackpack(backpack)
+		watchContainer(backpack)
 	end
 
-	localPlayer.CharacterAdded:Connect(watchOwnCharacter)
+	localPlayer.CharacterAdded:Connect(watchContainer)
 	localPlayer.CharacterRemoving:Connect(function()
-		ContextActionService:UnbindAction(ACTION_BLOCK)
-		ContextActionService:UnbindAction(ACTION_DASH)
+		unbindActions(nil)
 	end)
 	if localPlayer.Character then
-		task.spawn(watchOwnCharacter, localPlayer.Character)
+		task.spawn(watchContainer, localPlayer.Character)
 	end
 
 	feedbackEvent.OnClientEvent:Connect(onFeedback)
