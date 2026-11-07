@@ -59,23 +59,6 @@ local function balance(parent: Instance, pos: UDim2): TextLabel
 	hole.Rotation = 45
 	return label(box,"",UDim2.fromOffset(35,0),UDim2.new(1,-38,1,0),Enum.Font.GothamBold,17,gold)
 end
-local function cart(parent: GuiObject)
-	local function bar(x: number, y: number, w: number, h: number, r: number)
-		local f = frame(parent, UDim2.fromOffset(x,y), UDim2.fromOffset(w,h), gold)
-		f.Rotation = r
-		return f
-	end
-	bar(7,13,9,3,12)
-	bar(14,19,13,3,68)
-	bar(17,17,23,3,0)
-	bar(17,25,19,3,0)
-	bar(32,21,11,3,-67)
-	bar(20,29,15,2,0)
-	for _, x in {20,31} do
-		Instance.new("UICorner",bar(x,33,5,5,0)).CornerRadius = UDim.new(1,0)
-	end
-end
-
 -- ── Estadísticas de armas (tienda) ──
 local CAPTION = 112 -- alto del pie de cada tarjeta: nombre, estadísticas y acción
 local BETTER = "#78D278"
@@ -148,6 +131,77 @@ local function setDungeonLighting(on: boolean)
 	end
 end
 
+-- ── Mensajes flotantes en la mazmorra ──
+-- Mientras el jugador está en su sala, los avisos (Notify) no van al cartel de abajo: aparecen
+-- como un texto grande sobre su personaje (lo sigue, siempre de frente y del mismo tamaño en
+-- pantalla) durante FLOAT_TIME segundos, con colores según el tipo de mensaje.
+local FLOAT_TIME = 1.5
+local insideDungeon = false
+local floatToken = 0
+
+local function messageColors(text: string): ColorSequence
+	local lower = text:lower()
+	if lower:find("jefe") then
+		return ColorSequence.new(Color3.fromRGB(215, 120, 255), Color3.fromRGB(255, 70, 90))
+	elseif lower:find("superada") or lower:find("récord") then
+		return ColorSequence.new(Color3.fromRGB(255, 225, 90), Color3.fromRGB(110, 255, 140))
+	elseif lower:find("oleada") then
+		return ColorSequence.new(Color3.fromRGB(255, 200, 70), Color3.fromRGB(255, 80, 50))
+	end
+	return ColorSequence.new(Color3.fromRGB(255, 240, 160), Color3.fromRGB(255, 180, 60))
+end
+
+local function floatingMessage(text: string)
+	local char = Players.LocalPlayer.Character
+	local root = if char then char:FindFirstChild("HumanoidRootPart") else nil
+	if not root or not root:IsA("BasePart") then return end
+	floatToken += 1
+	local token = floatToken
+	local old = root:FindFirstChild("AvisoFlotante")
+	if old then old:Destroy() end
+
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name = "AvisoFlotante"
+	billboard.Size = UDim2.fromOffset(560, 96) -- en píxeles: legible a cualquier distancia de cámara
+	billboard.StudsOffset = Vector3.new(0, 4.5, 0)
+	billboard.AlwaysOnTop = true
+	billboard.LightInfluence = 0
+	billboard.MaxDistance = math.huge
+	local pop = Instance.new("UIScale")
+	pop.Scale = 0.4
+	pop.Parent = billboard
+	local textLabel = Instance.new("TextLabel")
+	textLabel.Size = UDim2.fromScale(1, 1)
+	textLabel.BackgroundTransparency = 1
+	textLabel.Font = Enum.Font.GothamBlack
+	textLabel.TextScaled = true
+	textLabel.TextWrapped = true
+	textLabel.TextColor3 = Color3.new(1, 1, 1)
+	textLabel.Text = text
+	textLabel.Parent = billboard
+	local limit = Instance.new("UITextSizeConstraint")
+	limit.MaxTextSize = 40
+	limit.Parent = textLabel
+	local outline = Instance.new("UIStroke")
+	outline.Color, outline.Thickness = Color3.fromRGB(30, 10, 10), 3
+	outline.Parent = textLabel
+	local gradient = Instance.new("UIGradient")
+	gradient.Color = messageColors(text)
+	gradient.Rotation = 90
+	gradient.Parent = textLabel
+	billboard.Parent = root
+
+	TweenService:Create(pop, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+	TweenService:Create(billboard, TweenInfo.new(FLOAT_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ StudsOffset = Vector3.new(0, 5.5, 0) }):Play()
+	local fade = TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.In, 0, false, FLOAT_TIME - 0.35)
+	TweenService:Create(textLabel, fade, { TextTransparency = 1 }):Play()
+	TweenService:Create(outline, fade, { Transparency = 1 }):Play()
+	task.delay(FLOAT_TIME, function()
+		if floatToken == token then billboard:Destroy() end
+	end)
+end
+
 -- ── Panel de la mazmorra ──
 -- Lee los Attributes que publica DungeonService en workspace.Mazmorra y se muestra
 -- solo mientras el jugador está dentro de la sala.
@@ -161,6 +215,39 @@ local function dungeonPanel(gui: ScreenGui)
 	local title = label(box, "", UDim2.fromOffset(0, 6), UDim2.new(1, 0, 0, 28), Enum.Font.Antique, 24, ivory)
 	local detail = label(box, "", UDim2.fromOffset(0, 34), UDim2.new(1, 0, 0, 20), Enum.Font.GothamMedium, 14, gold)
 	title.TextXAlignment, detail.TextXAlignment = Enum.TextXAlignment.Center, Enum.TextXAlignment.Center
+
+	-- Botón rojo "Exit" (debajo del panel de la oleada): el primer toque pide confirmación
+	-- ("Sure?") y el segundo, dentro de CONFIRM_TIME, te saca de la mazmorra (remote LeaveDungeon).
+	local CONFIRM_TIME = 3
+	local exit = button(gui, "Exit", UDim2.new(0.5, 0, 0, 80), UDim2.fromOffset(122, 40), Color3.fromRGB(150, 30, 34))
+	exit.Name = "SalirMazmorra"
+	exit.AnchorPoint = Vector2.new(0.5, 0)
+	exit.TextSize = 20
+	exit.Visible = false
+	stroke(exit, Color3.fromRGB(235, 96, 90))
+	local armedAt: number? = nil
+	local leavingUntil = 0 -- tras confirmar, no volver a mostrarlo mientras llega el teletransporte
+	local function disarm()
+		armedAt = nil
+		exit.Text = "Exit"
+		exit.BackgroundColor3 = Color3.fromRGB(150, 30, 34)
+	end
+	exit.Activated:Connect(function()
+		local now = os.clock()
+		if armedAt and now - armedAt <= CONFIRM_TIME then
+			disarm()
+			exit.Visible = false
+			leavingUntil = now + 2
+			Remotes.GetEvent("LeaveDungeon"):FireServer()
+			return
+		end
+		armedAt = now
+		exit.Text = "Sure?"
+		exit.BackgroundColor3 = Color3.fromRGB(200, 40, 40)
+		task.delay(CONFIRM_TIME, function()
+			if armedAt == now then disarm() end
+		end)
+	end)
 
 	task.spawn(function()
 		local mazmorra = workspace:WaitForChild("Mazmorra")
@@ -178,6 +265,12 @@ local function dungeonPanel(gui: ScreenGui)
 				inside = math.abs(offset.X) <= size / 2 and math.abs(offset.Z) <= size / 2 and offset.Y > -5 and offset.Y < 25
 			end
 			box.Visible = inside
+			insideDungeon = inside
+			local showExit = inside and os.clock() >= leavingUntil
+			if exit.Visible ~= showExit then
+				exit.Visible = showExit
+				disarm()
+			end
 			setDungeonLighting(inside)
 			if inside and dungeon then
 				local wave = dungeon:GetAttribute("Wave")
@@ -205,12 +298,88 @@ function UIController:Init()
 	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 	local hudGold = balance(gui, UDim2.new(1,-14,0,10))
 	dungeonPanel(gui)
-	local toggle = button(gui, "", UDim2.new(0.5,0,1,-68), UDim2.fromOffset(122,48),ink)
-	toggle.Name = "Tienda"
-	toggle.AnchorPoint = Vector2.new(0.5,1)
-	stroke(toggle,gold)
-	cart(toggle)
-	label(toggle,"Tienda",UDim2.fromOffset(47,0),UDim2.new(1,-49,1,0),Enum.Font.GothamBold,17,ivory)
+	-- La tienda ya no tiene botón en el HUD: se abre desde su puesto del lobby (OpenShop).
+	local shopOpen = false
+	-- Botón del Void Pass, arriba a la derecha debajo de "Códigos". Se oculta cuando ya lo tenés (Player.VoidPass).
+	local violet = Color3.fromRGB(176, 120, 255)
+	local passButton = button(gui, "", UDim2.new(1,-14,0,88), UDim2.fromOffset(176,48), Color3.fromRGB(34,20,52))
+	passButton.Name = "PaseDelVacio"
+	passButton.AnchorPoint = Vector2.new(1,0)
+	stroke(passButton, violet)
+	label(passButton,"★ Void Pass",UDim2.fromOffset(12,4),UDim2.new(1,-16,0,22),Enum.Font.GothamBold,16,violet)
+	label(passButton,"Guadaña del Vacío · Oro x2",UDim2.fromOffset(12,25),UDim2.new(1,-16,0,18),Enum.Font.Gotham,12,ivory)
+	local function updatePassButton()
+		passButton.Visible = not shopOpen and player:GetAttribute("VoidPass") ~= true
+	end
+	player:GetAttributeChangedSignal("VoidPass"):Connect(updatePassButton)
+	updatePassButton()
+
+	-- ── Canje de códigos (CodeService) ──
+	local codesButton = button(gui, "🎟  Códigos", UDim2.new(1,-14,0,50), UDim2.fromOffset(109,30), ink)
+	codesButton.Name = "Codigos"
+	codesButton.AnchorPoint = Vector2.new(1,0)
+	codesButton.TextSize = 14
+	stroke(codesButton, gold)
+	local codesPanel = frame(gui, UDim2.fromScale(0.5,0.5), UDim2.fromOffset(340,190), ink)
+	codesPanel.AnchorPoint = Vector2.new(0.5,0.5)
+	codesPanel.Active, codesPanel.Visible, codesPanel.ZIndex = true, false, 8
+	stroke(codesPanel, gold)
+	frame(codesPanel, UDim2.new(), UDim2.new(1,0,0,2), gold).ZIndex = 8
+	label(codesPanel,"Canjear código",UDim2.fromOffset(16,10),UDim2.new(1,-70,0,34),Enum.Font.Antique,26,ivory)
+	local codesClose = button(codesPanel,"×",UDim2.new(1,-46,0,10),UDim2.fromOffset(34,34),Color3.fromRGB(66,35,42))
+	codesClose.TextSize = 24
+	local codeBox = Instance.new("TextBox")
+	codeBox.Position, codeBox.Size = UDim2.fromOffset(16,56), UDim2.new(1,-32,0,40)
+	codeBox.BackgroundColor3, codeBox.BorderSizePixel = slate, 0
+	codeBox.Font, codeBox.TextSize, codeBox.TextColor3 = Enum.Font.GothamBold, 18, ivory
+	codeBox.PlaceholderText, codeBox.PlaceholderColor3 = "Escribí tu código", muted
+	codeBox.Text, codeBox.ClearTextOnFocus = "", false
+	codeBox.Parent = codesPanel
+	stroke(codeBox, edge)
+	local redeemButton = button(codesPanel,"Canjear",UDim2.fromOffset(16,106),UDim2.new(1,-32,0,38),Color3.fromRGB(92,68,28))
+	stroke(redeemButton, gold)
+	local codeResult = label(codesPanel,"",UDim2.fromOffset(16,150),UDim2.new(1,-32,0,32),Enum.Font.GothamMedium,13,muted)
+	codeResult.TextWrapped, codeResult.TextXAlignment = true, Enum.TextXAlignment.Center
+	for _, d in codesPanel:GetDescendants() do
+		if d:IsA("GuiObject") then d.ZIndex = 9 end
+	end
+
+	local redeeming = false
+	local function submitCode()
+		if redeeming then return end
+		local text = codeBox.Text
+		if text:gsub("%s", "") == "" then
+			codeResult.Text, codeResult.TextColor3 = "Escribí un código.", muted
+			return
+		end
+		redeeming = true
+		redeemButton.Text = "Canjeando…"
+		local ok, success, message = pcall(function()
+			return Remotes.GetFunction("RedeemCode"):InvokeServer(text)
+		end)
+		redeeming = false
+		redeemButton.Text = "Canjear"
+		local good = ok and success == true
+		codeResult.Text = if ok and typeof(message) == "string" then message else "No se pudo canjear el código."
+		codeResult.TextColor3 = if good then Color3.fromRGB(120, 220, 120) else Color3.fromRGB(235, 110, 100)
+		if good then
+			codeBox.Text = ""
+			Sounds.Play("Compra")
+		end
+	end
+	local function showCodes(open: boolean)
+		codesPanel.Visible = open
+		if open then
+			codeResult.Text = ""
+			codeBox:CaptureFocus()
+		end
+	end
+	codesButton.Activated:Connect(function() showCodes(not codesPanel.Visible) end)
+	codesClose.Activated:Connect(function() showCodes(false) end)
+	redeemButton.Activated:Connect(submitCode)
+	codeBox.FocusLost:Connect(function(enterPressed)
+		if enterPressed then submitCode() end
+	end)
 	local shade = button(gui,"",UDim2.new(),UDim2.fromScale(1,1),Color3.new())
 	shade.AutoButtonColor = false
 	shade.BackgroundTransparency = 0.28
@@ -263,6 +432,14 @@ function UIController:Init()
 	stroke(message,gold)
 	local messageId = 0
 	local function notify(text: string)
+		-- En la mazmorra el aviso sale flotando sobre el personaje en vez de en el cartel de abajo.
+		local mazmorra = workspace:FindFirstChild("Mazmorra")
+		local hasRoom = mazmorra ~= nil and mazmorra:FindFirstChild(`Sala_{player.UserId}`) ~= nil
+		if (insideDungeon or hasRoom) and not panel.Visible then
+			message.Visible = false
+			floatingMessage(text)
+			return
+		end
 		messageId += 1
 		local current = messageId
 		message.Text, message.Visible = text, true
@@ -410,10 +587,15 @@ function UIController:Init()
 
 	local ids = {}
 	for id in WeaponData.Weapons do table.insert(ids, id) end
+	-- Orden: el arma inicial, después las de oro de la más barata a la más cara, y al final las de pase.
 	table.sort(ids, function(a, b)
 		if a == b then return false end
 		if a == WeaponData.DEFAULT_WEAPON then return true end
 		if b == WeaponData.DEFAULT_WEAPON then return false end
+		local wa, wb = WeaponData.Weapons[a], WeaponData.Weapons[b]
+		local pa, pb = wa.Acquisition == "GamePass", wb.Acquisition == "GamePass"
+		if pa ~= pb then return pb end
+		if wa.Price ~= wb.Price then return wa.Price < wb.Price end
 		return a < b
 	end)
 	for order, id in ids do
@@ -450,20 +632,18 @@ function UIController:Init()
 			refresh()
 		end)
 	end
-	Marketplace.PromptGamePassPurchaseFinished:Connect(function(buyer, passId, purchased)
+	-- El servidor activa el pase y equipa el arma (ShopService) y avisa por Notify; acá solo se actualiza.
+	Marketplace.PromptGamePassPurchaseFinished:Connect(function(buyer, _, purchased)
 		if buyer ~= player or not purchased then return end
-		for _, id in ids do
-			if WeaponData.Weapons[id].GamePassId == passId then
-				local ok, _, reason = pcall(function() return Remotes.GetFunction("PurchaseWeapon"):InvokeServer(id) end)
-				notify(if ok then reason else "Volvé a consultar el pase en la tienda.")
-				refresh()
-				return
-			end
-		end
+		Sounds.Play("Compra")
+		task.delay(1, refresh)
 	end)
 	local function show(open: boolean)
 		panel.Visible, shade.Visible = open, open
-		toggle.Visible = not open
+		shopOpen = open
+		updatePassButton()
+		codesButton.Visible = not open
+		if open then codesPanel.Visible = false end
 		if hudGold.Parent and hudGold.Parent:IsA("GuiObject") then hudGold.Parent.Visible = not open end
 		if open then
 			Sounds.Play("Tienda")
@@ -472,7 +652,14 @@ function UIController:Init()
 			refresh()
 		end
 	end
-	toggle.Activated:Connect(function() show(true) end)
+	passButton.Activated:Connect(function()
+		local passId = WeaponData.Weapons.VoidScythe.GamePassId
+		if not passId or passId <= 0 then
+			notify("El Void Pass todavía no está a la venta.")
+			return
+		end
+		Marketplace:PromptGamePassPurchase(player, passId)
+	end)
 	close.Activated:Connect(function() show(false) end)
 	shade.Activated:Connect(function() show(false) end)
 	local function filter(onlyOwned: boolean)

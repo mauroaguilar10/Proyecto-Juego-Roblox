@@ -52,13 +52,38 @@ El **escritor** es el único que puede hacer `SetAttribute`. Los demás solo lee
 
 **Mazmorras individuales (DungeonService, B):** cada jugador que cruza el arco recibe su propia sala
 (`workspace.Mazmorra.Sala_<UserId>`, a 160 studs de altura y separadas 160 en X) y empieza en la oleada 1.
-La sala se borra al salir por el portal, al pasar 8 s fuera de ella (muerte, duelo) o al irse del juego.
+No hay portal de salida: el botón rojo "Exit" del HUD (pide confirmación con "Sure?") manda el remote
+`LeaveDungeon` (C→S) y el servidor te devuelve delante del arco. La sala se borra al tocar "Exit", al pasar 8 s fuera de ella (muerte, duelo) o al irse del juego.
 Los guardianes solo atacan al dueño de la sala. El arco del lobby está en `workspace.Mazmorra.Entrada`.
 
 **Progreso guardado (DataService, B):** `bestWave` (mejor oleada alcanzada) y `kills` (guardianes
 derrotados) se guardan en el perfil y se muestran en `Player.leaderstats` ("Mejor oleada", "Guardianes").
 `RecordsService` publica la mejor oleada en el OrderedDataStore `BestWave_v1` y la muestra en el
 cartel de récords del lobby. Las armas de GamePass se vuelven a verificar cada vez que el jugador entra.
+
+**Pase del Vacío (DataService / ShopService, B):** el pase cuyo ID es `WeaponData.Weapons.VoidScythe.GamePassId`
+da la Guadaña del Vacío y **duplica el oro de la mazmorra** (`DataService.GoldMultiplier`). Se verifica al
+entrar y se activa en el momento de la compra (`MarketplaceService.PromptGamePassPurchaseFinished` en el
+servidor). `DataService` escribe `Player.VoidPass` (`boolean`) y `UIController` lo lee para el botón del HUD.
+
+**Armería (ArmorService / ArmorController, B):** piezas en `Shared/ArmorData` (3 sets × Casco, Pechera,
+Pantalón) y su aspecto en `Shared/ArmorArt`. Remote `ArmorShop` (C→S→C: `"Get" | "Buy" | "Equip" | "Unequip"`).
+Lo comprado y lo puesto se guarda en el perfil (`armorOwned`, `armorEquipped`). En el personaje, cada pieza
+es un Model `Armadura_<Slot>` soldado al cuerpo; los accesorios que chocarían se guardan aparte y vuelven
+al quitarla. `ArmorService` escribe `Humanoid.MaxHealth` (100 + vida de las piezas) y el Attribute
+**`Humanoid.Armor`** (`number`, 0..0.6): reducción del daño recibido, que aplican `DungeonService` (guardianes)
+y `CombatService` (duelos) antes de `TakeDamage`.
+**Barra de vida (HealthHUD, B):** reemplaza la de Roblox (`SetCoreGuiEnabled(Health, false)`): "vida/máx HP"
+dentro de la barra y color según el %. La tienda de armas ya no tiene botón en el HUD: se abre desde su puesto.
+
+**Códigos (CodeService, B):** remote `RedeemCode` (C→S→C, devuelve `ok, mensaje`). Los códigos viven solo
+en el servidor; cada uno se canjea una vez por jugador (`redeemed` en el perfil). Un código puede dar oro o
+el Void Pass; un pase dado por código se guarda en `bonusPasses` del perfil y se reactiva en cada entrada
+sin consultar a Roblox.
+
+**Modelos de armas (`Shared/WeaponArt`):** las armas detalladas (Colmillo de Escarcha, Lanza del Alba,
+Hacha del Coloso) se arman una sola vez y las usan `WeaponModels` (el arma en la mano, mismo contrato:
+Model "Weapon" + Grip) y `WeaponPreview` (la ficha de la tienda).
 
 **Avisos de Economía (`Notify`, S→C):** además de texto, `DungeonService` manda
 `{ Kind = "Gold", Amount: number, Position: Vector3 }` al jugador que mató a un guardián;

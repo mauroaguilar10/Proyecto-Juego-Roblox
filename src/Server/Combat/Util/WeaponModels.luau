@@ -9,6 +9,8 @@
 	Cuando haya modelos reales (.rbxm), reemplazar Build() por un Clone() del asset.
 ]]
 
+local WeaponArt = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("WeaponArt"))
+
 type PartSpec = {
 	Name: string,
 	Size: Vector3,
@@ -48,6 +50,11 @@ local WeaponModels = {}
 
 -- Devuelve un Model cuyo PrimaryPart ("Grip", invisible) está en el origen del agarre.
 function WeaponModels.Build(weaponId: string): Model
+	-- Armas con modelo detallado compartido con la tienda (mismo contrato: Model "Weapon" + Grip).
+	if WeaponArt.Has(weaponId) then
+		return WeaponArt.Build(weaponId)
+	end
+
 	local model = Instance.new("Model")
 	model.Name = "Weapon"
 	model:SetAttribute("WeaponId", weaponId)

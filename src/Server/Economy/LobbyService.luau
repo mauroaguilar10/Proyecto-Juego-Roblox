@@ -7,7 +7,8 @@
 	  Centro      Plaza con mosaico y cuatro obeliscos con fuego.
 	  Este  (+X)  Arco de la mazmorra (lo arma DungeonService).
 	  Oeste (-X)  Salón de la fama alrededor del tablero de récords (el tablero lo arma RecordsService).
-	  Norte (-Z)  Puesto de la tienda: su ProximityPrompt tiene OpenShop = true y UIController
+	  Norte (-Z)  Armería (derecha; su ProximityPrompt tiene OpenArmorShop = true → ArmorController) y
+	              puesto de la tienda (izquierda): su ProximityPrompt tiene OpenShop = true y UIController
 	              abre la tienda al activarlo (no pasa por el servidor).
 	  Sur   (+Z)  Estatua del campeón y portón de la fortaleza.
 	  Sudoeste    Campo de entrenamiento con muñecos de práctica: se les puede pegar (CombatService
@@ -228,9 +229,12 @@ end
 
 -- ── Estaciones ──
 
--- Puesto de la tienda. `cf` a ras del piso; el frente (-Z local) mira hacia el spawn.
-local function shopStall(parent: Instance, cf: CFrame)
-	local awning = { Color3.fromRGB(176, 52, 48), Color3.fromRGB(236, 222, 196) }
+-- Puesto de la tienda de armas o de la armería (`armory`). `cf` a ras del piso; el frente
+-- (-Z local) mira hacia el spawn. El ProximityPrompt lleva OpenShop u OpenArmorShop = true.
+local function shopStall(parent: Instance, cf: CFrame, armory: boolean)
+	local awning = if armory
+		then { Color3.fromRGB(46, 74, 128), Color3.fromRGB(200, 206, 216) }
+		else { Color3.fromRGB(176, 52, 48), Color3.fromRGB(236, 222, 196) }
 	local counter = Kit.part(parent, "Mostrador", cf * CFrame.new(0, 1.5, 0), Vector3.new(9, 3, 2.4), C.Wood, Enum.Material.WoodPlanks)
 	Kit.part(parent, "Tablero", cf * CFrame.new(0, 3.1, 0), Vector3.new(9.4, 0.2, 2.8), C.DarkWood, Enum.Material.Wood)
 	Kit.part(parent, "Estante", cf * CFrame.new(0, 3.5, 3.4), Vector3.new(9, 7, 0.6), C.DarkWood, Enum.Material.WoodPlanks)
@@ -249,15 +253,28 @@ local function shopStall(parent: Instance, cf: CFrame)
 		Kit.part(parent, "Toldo", cf * CFrame.new(x, 8.7, 1.1) * CFrame.Angles(math.rad(-12), 0, 0),
 			Vector3.new(width, 0.25, 5.6), awning[(i % 2) + 1], Enum.Material.Fabric)
 	end
-	for i, x in { -3, 0, 3 } do
-		Kit.sword(parent, cf * CFrame.new(x, 4.85, 2.9) * CFrame.Angles(0, 0, math.rad(20)), 2.4, Color3.fromRGB(200, 205, 212):Lerp(C.Gold, (i - 1) / 2))
+	if armory then
+		-- Yelmos en las repisas y una coraza en un soporte al costado.
+		for i, x in { -3, 0, 3 } do
+			local metal = Color3.fromRGB(150, 156, 166):Lerp(Color3.fromRGB(60, 50, 56), (i - 1) / 2)
+			Kit.part(parent, "Yelmo", cf * CFrame.new(x, 5.25, 2.9), Vector3.new(1, 1.05, 1), metal, Enum.Material.Metal, false)
+			Kit.part(parent, "Visera", cf * CFrame.new(x, 5.35, 2.39), Vector3.new(0.75, 0.08, 0.04), Color3.fromRGB(20, 20, 24), Enum.Material.SmoothPlastic, false)
+		end
+		local stand = cf * CFrame.new(5.6, 0, -0.4)
+		Kit.part(parent, "Soporte", stand * CFrame.new(0, 1.6, 0), Vector3.new(0.3, 3.2, 0.3), C.DarkWood, Enum.Material.Wood)
+		Kit.part(parent, "Coraza", stand * CFrame.new(0, 3.6, 0), Vector3.new(2.2, 1.9, 1.2), Color3.fromRGB(170, 176, 186), Enum.Material.Metal)
+		Kit.part(parent, "Hombreras", stand * CFrame.new(0, 4.45, 0), Vector3.new(3, 0.45, 1.3), Color3.fromRGB(110, 114, 124), Enum.Material.Metal)
+	else
+		for i, x in { -3, 0, 3 } do
+			Kit.sword(parent, cf * CFrame.new(x, 4.85, 2.9) * CFrame.Angles(0, 0, math.rad(20)), 2.4, Color3.fromRGB(200, 205, 212):Lerp(C.Gold, (i - 1) / 2))
+		end
 	end
 	for i = 1, 4 do
 		local coin = Kit.part(parent, "Moneda", cf * CFrame.new(-2.6 + i * 0.35, 3.25 + (i % 2) * 0.1, -0.4) * CFrame.Angles(0, 0, math.rad(90)),
 			Vector3.new(0.1, 0.5, 0.5), C.Gold, Enum.Material.Metal, false)
 		coin.Shape = Enum.PartType.Cylinder
 	end
-	local sign = Kit.sign(parent, cf * CFrame.new(0, 10.1, -1.4), Vector3.new(6, 1.6, 0.25), "TIENDA")
+	local sign = Kit.sign(parent, cf * CFrame.new(0, 10.1, -1.4), Vector3.new(6, 1.6, 0.25), if armory then "ARMERÍA" else "TIENDA")
 	for _, x in { -2.4, 2.4 } do
 		Kit.part(parent, "Soporte", cf * CFrame.new(x, 8.9, -1.4), Vector3.new(0.2, 1.4, 0.2), C.DarkWood, Enum.Material.Wood, false)
 	end
@@ -267,16 +284,18 @@ local function shopStall(parent: Instance, cf: CFrame)
 	-- Mercadería alrededor.
 	Kit.barrel(parent, (cf * CFrame.new(-6.4, 0, 0.5)).Position)
 	Kit.barrel(parent, (cf * CFrame.new(-6.2, 0, 3)).Position)
-	Kit.crate(parent, cf * CFrame.new(6.5, 0, 1) * CFrame.Angles(0, math.rad(12), 0), 2.6)
-	Kit.crate(parent, cf * CFrame.new(6.4, 2.6, 1.2) * CFrame.Angles(0, math.rad(-8), 0), 1.8)
+	if not armory then
+		Kit.crate(parent, cf * CFrame.new(6.5, 0, 1) * CFrame.Angles(0, math.rad(12), 0), 2.6)
+		Kit.crate(parent, cf * CFrame.new(6.4, 2.6, 1.2) * CFrame.Angles(0, math.rad(-8), 0), 1.8)
+	end
 
 	local prompt = Instance.new("ProximityPrompt")
-	prompt.Name = "AbrirTienda"
-	prompt.ObjectText = "Tienda"
-	prompt.ActionText = "Abrir tienda"
+	prompt.Name = if armory then "AbrirArmeria" else "AbrirTienda"
+	prompt.ObjectText = if armory then "Armería" else "Tienda"
+	prompt.ActionText = if armory then "Abrir armería" else "Abrir tienda"
 	prompt.MaxActivationDistance = 9
 	prompt.RequiresLineOfSight = false
-	prompt:SetAttribute("OpenShop", true)
+	prompt:SetAttribute(if armory then "OpenArmorShop" else "OpenShop", true)
 	prompt.Parent = counter
 end
 
@@ -302,7 +321,7 @@ local function signpost(parent: Instance, x: number, z: number)
 	local base = at(x, 0, z)
 	Kit.cylinder(parent, "Poste", base + Vector3.new(0, 4, 0), 8, 0.6, C.DarkWood, Enum.Material.Wood)
 	local targets = {
-		{ "MAZMORRA", 14, 0 }, { "TIENDA", 0, -16 }, { "RÉCORDS", -14, 0 },
+		{ "MAZMORRA", 14, 0 }, { "TIENDA", -8.5, -21 }, { "ARMERÍA", 8.5, -21 }, { "RÉCORDS", -14, 0 },
 		{ "ENTRENAMIENTO", -34, 30 }, { "DUELOS", 34, 30 },
 	}
 	for i, t in targets do
@@ -635,7 +654,8 @@ function LobbyService:Init()
 	folder.Name = "Lobby"
 	plaza(folder)
 	fortress(folder)
-	shopStall(folder, facing(0, -16, 0, 0))
+	shopStall(folder, facing(-8.5, -21, 0, 0), false) -- armas
+	shopStall(folder, facing(8.5, -21, 0, 0), true) -- armaduras
 	hallOfFame(folder)
 	signpost(folder, 10, -10)
 	statue(folder)

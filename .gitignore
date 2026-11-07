@@ -25,6 +25,7 @@ Thumbs.db
 desktop.ini
 *.swp
 *.log
+.claude/settings.local.json
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json

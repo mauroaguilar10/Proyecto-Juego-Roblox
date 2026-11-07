@@ -78,16 +78,74 @@ local Weapons: { [string]: WeaponStats } = {
 		StepForwardForce = 18,
 	},
 
+	-- Armas detalladas (modelo en Shared/WeaponArt).
+	FrostFang = {
+		Id = "FrostFang",
+		DisplayName = "Colmillo de Escarcha",
+		Damage = 21,
+		AttackCooldown = 0.7,
+		Range = 7.5,
+		Acquisition = "Gold",
+		Price = 1500,
+		DropChance = 0,
+		GamePassId = nil,
+
+		Weight = "Medium",
+		WindupTime = 0.28,
+		RecoveryTime = 0.42,
+		PostureDamage = 22,
+		StepForwardForce = 17,
+	},
+
+	DawnSpear = {
+		Id = "DawnSpear",
+		DisplayName = "Lanza del Alba",
+		Damage = 19,
+		AttackCooldown = 0.6,
+		Range = 10,
+		Acquisition = "Gold",
+		Price = 3000,
+		DropChance = 0,
+		GamePassId = nil,
+
+		-- Lanza: ataque rápido y de lejos, poca presión sobre la guardia.
+		Weight = "Light",
+		WindupTime = 0.22,
+		RecoveryTime = 0.38,
+		PostureDamage = 18,
+		StepForwardForce = 20,
+	},
+
+	ColossusAxe = {
+		Id = "ColossusAxe",
+		DisplayName = "Hacha del Coloso",
+		Damage = 38,
+		AttackCooldown = 1.1,
+		Range = 7,
+		Acquisition = "Gold",
+		Price = 6000,
+		DropChance = 0,
+		GamePassId = nil,
+
+		-- Hacha: golpe lento y muy pesado; rompe guardias y tiene hyperarmor.
+		Weight = "Heavy",
+		WindupTime = 0.5,
+		RecoveryTime = 0.65,
+		PostureDamage = 40,
+		StepForwardForce = 26,
+	},
+
+	-- Arma del Pase del Vacío (el pase además duplica el oro de la mazmorra: ver DataService).
 	VoidScythe = {
 		Id = "VoidScythe",
 		DisplayName = "Guadaña del Vacío",
-		Damage = 24,
-		AttackCooldown = 0.9,
+		Damage = 30,
+		AttackCooldown = 0.85,
 		Range = 9,
 		Acquisition = "GamePass",
 		Price = 0,
 		DropChance = 0,
-		GamePassId = 0, -- TODO: reemplazar por el ID real del GamePass
+		GamePassId = 2075385839, -- "Void pass" en Roblox
 
 		Weight = "Heavy",
 		WindupTime = 0.45,
