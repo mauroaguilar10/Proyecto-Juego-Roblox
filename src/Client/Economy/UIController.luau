@@ -4,7 +4,7 @@ local Marketplace = game:GetService("MarketplaceService")
 local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
 local Remotes = require(Shared:WaitForChild("Remotes") :: ModuleScript)
 local WeaponData = require(Shared:WaitForChild("WeaponData") :: ModuleScript)
-local Preview = require(script.Parent.Util.WeaponPreview)
+local Preview = require(script.Parent:WaitForChild("Util"):WaitForChild("WeaponPreview"))
 local UIController = {}
 
 local ink = Color3.fromRGB(15, 19, 26)
@@ -71,12 +71,97 @@ local function cart(parent: GuiObject)
 	end
 end
 
+-- ── Estadísticas de armas (tienda) ──
+local CAPTION = 112 -- alto del pie de cada tarjeta: nombre, estadísticas y acción
+local BETTER = "#78D278"
+local WORSE = "#E66E64"
+
+local function fmt(value: number, decimals: number): string
+	local text = string.format(`%.{decimals}f`, value):gsub("%.", ",")
+	return text
+end
+
+-- "+8" en verde si es mejor, "−2" en rojo si es peor, nada si es igual.
+local function delta(diff: number, decimals: number): string
+	if math.abs(diff) < 0.5 * 10 ^ -decimals then return "" end
+	local sign = if diff > 0 then "+" else "−"
+	return `  <font color="{if diff > 0 then BETTER else WORSE}">{sign}{fmt(math.abs(diff), decimals)}</font>`
+end
+
+local function currentWeapon(): WeaponData.WeaponStats
+	local equipped = Players.LocalPlayer:GetAttribute("EquippedWeapon")
+	return WeaponData.GetOrDefault(if typeof(equipped) == "string" then equipped else nil)
+end
+
+-- Daño, velocidad (golpes por segundo) y alcance; si `compare` existe, la diferencia contra esa arma.
+local function statsText(w: WeaponData.WeaponStats, compare: WeaponData.WeaponStats?): string
+	local speed = 1 / w.AttackCooldown
+	local lines = {
+		{ "Daño", fmt(w.Damage, 0), if compare then delta(w.Damage - compare.Damage, 0) else "" },
+		{ "Velocidad", fmt(speed, 2) .. " golpes/s", if compare then delta(speed - 1 / compare.AttackCooldown, 2) else "" },
+		{ "Alcance", fmt(w.Range, 0) .. " studs", if compare then delta(w.Range - compare.Range, 0) else "" },
+	}
+	local out = {}
+	for _, line in lines do
+		table.insert(out, `{line[1]} <b>{line[2]}</b>{line[3]}`)
+	end
+	return table.concat(out, "\n")
+end
+
+-- ── Panel de la mazmorra ──
+-- Lee los Attributes que publica DungeonService en workspace.Mazmorra y se muestra
+-- solo mientras el jugador está dentro de la sala.
+local function dungeonPanel(gui: ScreenGui)
+	local box = frame(gui, UDim2.new(0.5, 0, 0, 10), UDim2.fromOffset(240, 62), ink)
+	box.AnchorPoint = Vector2.new(0.5, 0)
+	box.BackgroundTransparency = 0.1
+	box.Visible = false
+	stroke(box, gold)
+	frame(box, UDim2.new(), UDim2.new(1, 0, 0, 2), gold)
+	local title = label(box, "", UDim2.fromOffset(0, 6), UDim2.new(1, 0, 0, 28), Enum.Font.Antique, 24, ivory)
+	local detail = label(box, "", UDim2.fromOffset(0, 34), UDim2.new(1, 0, 0, 20), Enum.Font.GothamMedium, 14, gold)
+	title.TextXAlignment, detail.TextXAlignment = Enum.TextXAlignment.Center, Enum.TextXAlignment.Center
+
+	task.spawn(function()
+		local dungeon = workspace:WaitForChild("Mazmorra")
+		local player = Players.LocalPlayer
+		while true do
+			local center = dungeon:GetAttribute("Center")
+			local size = dungeon:GetAttribute("Size")
+			local char = player.Character
+			local root = if char then char:FindFirstChild("HumanoidRootPart") else nil
+			local inside = false
+			if typeof(center) == "Vector3" and typeof(size) == "number" and root and root:IsA("BasePart") then
+				local offset = root.Position - center
+				inside = math.abs(offset.X) <= size / 2 and math.abs(offset.Z) <= size / 2 and offset.Y > -5 and offset.Y < 25
+			end
+			box.Visible = inside
+			if inside then
+				local wave = dungeon:GetAttribute("Wave")
+				local left = dungeon:GetAttribute("EnemiesLeft")
+				local nextAt = dungeon:GetAttribute("NextWaveAt")
+				local remaining = if typeof(nextAt) == "number" and nextAt > 0 then nextAt - workspace:GetServerTimeNow() else 0
+				if remaining > 0 then
+					title.Text = `Oleada {(if typeof(wave) == "number" then wave else 0) + 1}`
+					detail.Text = `Empieza en {math.ceil(remaining)}…`
+				else
+					title.Text = `Oleada {if typeof(wave) == "number" then wave else "—"}`
+					local count = if typeof(left) == "number" then left else 0
+					detail.Text = if count == 1 then "Queda 1 guardián" else `Quedan {count} guardianes`
+				end
+			end
+			task.wait(0.2)
+		end
+	end)
+end
+
 function UIController:Init()
 	local player = Players.LocalPlayer
 	local gui = Instance.new("ScreenGui")
 	gui.Name, gui.ResetOnSpawn = "EconomyHUD", false
 	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 	local hudGold = balance(gui, UDim2.new(1,-14,0,10))
+	dungeonPanel(gui)
 	local toggle = button(gui, "", UDim2.new(0.5,0,1,-68), UDim2.fromOffset(122,48),ink)
 	toggle.Name = "Tienda"
 	toggle.AnchorPoint = Vector2.new(0.5,1)
@@ -122,7 +207,7 @@ function UIController:Init()
 		local width = list.AbsoluteSize.X
 		local columns = if width >= 570 then 3 elseif width >= 265 then 2 else 1
 		local cell = math.max(1,math.floor((width-5-(columns-1)*9)/columns))
-		grid.CellSize = UDim2.fromOffset(cell,math.clamp(cell+45,189,285))
+		grid.CellSize = UDim2.fromOffset(cell,math.clamp(cell+CAPTION-27,229,325))
 	end
 	list:GetPropertyChangedSignal("AbsoluteSize"):Connect(resize)
 	local message = label(gui,"",UDim2.new(0.5,0,1,-12),UDim2.new(0.86,0,0,43),Enum.Font.GothamMedium,15,ivory)
@@ -145,7 +230,7 @@ function UIController:Init()
 
 	local owned: {[string]: boolean}? = nil
 	local inventoryOnly = false
-	type Card = {button: TextButton, state: TextLabel, border: UIStroke}
+	type Card = {button: TextButton, state: TextLabel, stats: TextLabel, border: UIStroke}
 	local rows: {[string]: Card} = {}
 	local function render()
 		local value = player:GetAttribute("Gold")
@@ -176,6 +261,7 @@ function UIController:Init()
 			else
 				action = "Obtener"
 			end
+			card.stats.Text = statsText(w, if equipped then nil else currentWeapon())
 			card.button.Visible = not inventoryOnly or equipped or (owned ~= nil and owned[id] == true)
 			card.button.Interactable = available
 			card.state.Text = action
@@ -213,13 +299,15 @@ function UIController:Init()
 		local art = Instance.new("UIGradient")
 		art.Color = ColorSequence.new(Color3.fromRGB(255,255,255),Color3.fromRGB(105,113,133))
 		art.Rotation, art.Parent = 65,row
-		Preview.draw(row,id)
-		local caption = frame(row,UDim2.new(0,0,1,-72),UDim2.new(1,0,0,72),ink)
+		Preview.draw(row,id,CAPTION)
+		local caption = frame(row,UDim2.new(0,0,1,-CAPTION),UDim2.new(1,0,0,CAPTION),ink)
 		frame(caption,UDim2.new(),UDim2.new(1,0,0,1),edge)
-		local title = label(caption,w.DisplayName,UDim2.fromOffset(9,2),UDim2.new(1,-18,0,41),Enum.Font.Antique,20,ivory)
+		local title = label(caption,w.DisplayName,UDim2.fromOffset(9,2),UDim2.new(1,-18,0,34),Enum.Font.Antique,20,ivory)
 		title.TextWrapped = true
-		local state = label(caption,"",UDim2.fromOffset(9,44),UDim2.new(1,-18,0,24),Enum.Font.GothamMedium,14,gold)
-		rows[id] = {button=row,state=state,border=stroke(row,edge)}
+		local stats = label(caption,"",UDim2.fromOffset(9,36),UDim2.new(1,-18,0,48),Enum.Font.Gotham,13,muted)
+		stats.RichText, stats.TextYAlignment = true, Enum.TextYAlignment.Top
+		local state = label(caption,"",UDim2.fromOffset(9,CAPTION-28),UDim2.new(1,-18,0,24),Enum.Font.GothamMedium,14,gold)
+		rows[id] = {button=row,state=state,stats=stats,border=stroke(row,edge)}
 		row.Activated:Connect(function()
 			if not owned or player:GetAttribute("InDuel") == true then return end
 			if owned[id] then

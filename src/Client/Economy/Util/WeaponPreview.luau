@@ -13,10 +13,11 @@ local function segment(view: ViewportFrame, a: Vector3, b: Vector3, width: numbe
 	p.Parent = view
 end
 
-function Preview.draw(parent: Instance, id: string)
+-- captionHeight: alto del pie de la tarjeta (nombre, estadísticas, acción) que queda debajo del dibujo.
+function Preview.draw(parent: Instance, id: string, captionHeight: number)
 	local view = Instance.new("ViewportFrame")
 	view.Name = "WeaponPreview"
-	view.Size = UDim2.new(1, -12, 1, -79)
+	view.Size = UDim2.new(1, -12, 1, -(captionHeight + 7))
 	view.Position = UDim2.fromOffset(6, 5)
 	view.BackgroundTransparency = 1
 	view.Ambient = Color3.fromRGB(161, 158, 156)

@@ -10,13 +10,23 @@
 	- Barra de vida: la dibuja HealthBarController (cliente, Combat) con el nombre del Model,
 	  que incluye la oleada ("Guardián · Oleada N").
 
+	- Progreso: cada baja suma a Guardianes de quien dio el último golpe; llegar a una oleada
+	  (estar en la sala cuando empieza, o entrar durante ella) cuenta para Mejor oleada.
+
 	Attributes que LEE: Humanoid.CombatState ("Stunned" frena al guardián), Humanoid.LastAttacker
 	(recompensa), Player.InDuel.
+
+	Attributes que ESCRIBE en workspace.Mazmorra (los lee UIController para el panel):
+	  Wave        : number  — oleada actual
+	  EnemiesLeft : number  — guardianes vivos de la oleada
+	  NextWaveAt  : number  — workspace:GetServerTimeNow() en que empieza la próxima oleada (0 = ninguna)
+	  Center      : Vector3 — centro de la sala; Size: number — lado de la sala (para saber si estás adentro)
 ]]
 local Players = game:GetService("Players")
-local Shared = game:GetService("ReplicatedStorage").Shared
-local Remotes = require(Shared.Remotes)
-local Data = require(script.Parent.DataService)
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Remotes = require(Shared:WaitForChild("Remotes"))
+local Data = require(script.Parent:WaitForChild("DataService"))
 local DungeonService = {}
 
 -- ── Tuning ──
@@ -56,6 +66,21 @@ local enemies: { Enemy } = {}
 local wave = 0
 local waveToken = 0
 local center = Vector3.zero
+local folder: Folder? = nil
+
+local function publish(attributes: { [string]: any })
+	if not folder then return end
+	for name, value in attributes do
+		folder:SetAttribute(name, value)
+	end
+end
+
+-- Mejor oleada: quien está en la sala "alcanza" la oleada en curso.
+local function recordWave(player: Player)
+	if wave > 0 and Data.RecordWave(player, wave) and wave > 1 then
+		Remotes.GetEvent("Notify"):FireClient(player, `¡Nuevo récord: oleada {wave}!`)
+	end
+end
 
 local function part(parent: Instance, name: string, position: Vector3, size: Vector3, color: Color3): Part
 	local p = Instance.new("Part")
@@ -98,6 +123,7 @@ local function reward(humanoid: Humanoid, gold: number)
 	if typeof(attacker) ~= "number" or attacker == 0 or attacker % 1 ~= 0 then return end
 	local player = Players:GetPlayerByUserId(attacker)
 	if not player then return end
+	Data.AddKill(player)
 	-- Solo oro: las armas se consiguen únicamente en la tienda (no hay drops).
 	if not Data.ChangeGold(player, gold) then return end
 	Remotes.GetEvent("Notify"):FireClient(player, `+{gold} de oro`)
@@ -109,6 +135,7 @@ local function onEnemyDied(enemy: Enemy, token: number)
 	local index = table.find(enemies, enemy)
 	if index then table.remove(enemies, index) end
 	task.delay(2, function() enemy.model:Destroy() end)
+	if token == waveToken then publish({ EnemiesLeft = #enemies }) end
 
 	local waveCleared = token == waveToken and #enemies == 0
 	if waveCleared then
@@ -124,6 +151,7 @@ local function onEnemyDied(enemy: Enemy, token: number)
 
 	if not waveCleared then return end
 	local cleared = wave
+	publish({ NextWaveAt = workspace:GetServerTimeNow() + WAVE_DELAY })
 	task.delay(WAVE_DELAY, function()
 		if token == waveToken then startWave(cleared + 1) end
 	end)
@@ -258,27 +286,30 @@ local function portal(parent: Instance, name: string, pos: Vector3, target: Vect
 		char:PivotTo(CFrame.new(target))
 		if entering then
 			Remotes.GetEvent("Notify"):FireClient(player, `Oleada {wave} en curso`)
+			recordWave(player)
 		end
 	end)
 end
 
 function DungeonService:Init()
-	local folder = Instance.new("Folder")
-	folder.Name = "Mazmorra"
-	folder.Parent = workspace
+	local dungeon = Instance.new("Folder")
+	dungeon.Name = "Mazmorra"
+	folder = dungeon
 	local spawn = workspace:FindFirstChildWhichIsA("SpawnLocation", true)
 	local origin = if spawn then spawn.Position else Vector3.zero
 	center = origin + Vector3.new(0, 160, 0)
+	publish({ Center = center, Size = ARENA_SIZE, Wave = 0, EnemiesLeft = 0, NextWaveAt = 0 })
+	dungeon.Parent = workspace
 	local entrance = origin + Vector3.new(10, 2, 0)
-	part(folder, "Piso", center, Vector3.new(ARENA_SIZE, 2, ARENA_SIZE), Color3.fromRGB(64, 70, 75))
+	part(dungeon, "Piso", center, Vector3.new(ARENA_SIZE, 2, ARENA_SIZE), Color3.fromRGB(64, 70, 75))
 	-- Paredes bajas para que nadie se caiga (ni guardianes ni jugadores).
 	for _, side in {Vector3.new(1, 0, 0), Vector3.new(-1, 0, 0), Vector3.new(0, 0, 1), Vector3.new(0, 0, -1)} do
 		local size = if side.X ~= 0 then Vector3.new(2, 6, ARENA_SIZE) else Vector3.new(ARENA_SIZE, 6, 2)
-		local wall = part(folder, "Pared", center + side * (ARENA_SIZE / 2 + 1) + Vector3.new(0, 3, 0), size, Color3.fromRGB(52, 57, 61))
+		local wall = part(dungeon, "Pared", center + side * (ARENA_SIZE / 2 + 1) + Vector3.new(0, 3, 0), size, Color3.fromRGB(52, 57, 61))
 		wall.Transparency = 0.3
 	end
-	portal(folder, "Entrar", entrance, center + Vector3.new(0, 5, 15), true)
-	portal(folder, "Salir", center + Vector3.new(0, 3, 21), entrance + Vector3.new(0, 2, 5), false)
+	portal(dungeon, "Entrar", entrance, center + Vector3.new(0, 5, 15), true)
+	portal(dungeon, "Salir", center + Vector3.new(0, 3, 21), entrance + Vector3.new(0, 2, 5), false)
 
 	startWave = function(number: number)
 		waveToken += 1
@@ -287,9 +318,13 @@ function DungeonService:Init()
 		for i = 1, stats.count do
 			local x = (i - (stats.count + 1) / 2) * 4.5
 			local z = -8 - (i % 2) * 5
-			spawnEnemy(folder, center + Vector3.new(x, 2.5, z), stats, waveToken)
+			spawnEnemy(dungeon, center + Vector3.new(x, 2.5, z), stats, waveToken)
 		end
+		publish({ Wave = number, EnemiesLeft = #enemies, NextWaveAt = 0 })
 		notifyArena(`Oleada {number}: {stats.count} guardianes`)
+		for _, player in playersInArena() do
+			recordWave(player)
+		end
 	end
 	startWave(1)
 
