@@ -10,6 +10,11 @@
 	  Fin: muerte (Defeat), salida del juego / reset del personaje (Forfeit) o tiempo (Timeout = empate).
 	Revancha: si A desafía a B mientras B tiene un desafío pendiente de A, el duelo empieza directo.
 
+	Modos y apuestas (DuelRules): "DuelRequest"(B, { Mode = "Informal" | "Duel", Bet }) y
+	"DuelInvite"(A, DuelInviteInfo). Solo se desafía parado en la arena del lobby (salvo la revancha
+	al último rival). Con apuesta, DuelWagerService (Economía) cobra a los dos al empezar, paga
+	DuelRules.Prize(bet) al ganador (pozo − 10 %) y devuelve la apuesta si hay empate.
+
 	Attributes que ESCRIBE: Player.InDuel (boolean). Es true desde la cuenta regresiva hasta el fin.
 	Payload de "DuelStateChanged": ver DuelStatePayload (documentado en ARCHITECTURE.md).
 ]]
@@ -17,10 +22,14 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Remotes = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Remotes"))
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Remotes = require(Shared:WaitForChild("Remotes"))
+local DuelRules = require(Shared:WaitForChild("DuelRules"))
+local DuelWagerService = require(script.Parent.Parent:WaitForChild("Economy"):WaitForChild("DuelWagerService"))
 
 type DuelPhase = "Countdown" | "Fighting" | "Ended"
 type EndReason = "Defeat" | "Forfeit" | "Timeout"
+type Mode = DuelRules.Mode
 
 type Duel = {
 	players: { Player },
@@ -29,24 +38,35 @@ type Duel = {
 	arena: Model,
 	returnCFrames: { [Player]: CFrame },
 	connections: { RBXScriptConnection },
+	mode: Mode,
+	bet: number, -- 0 en "Informal"
 }
 
 type Invite = {
 	from: Player,
 	expiresAt: number,
+	mode: Mode,
+	bet: number,
 }
+
+-- Segundo argumento de "DuelInvite".
+export type DuelInviteInfo = { Mode: Mode, Bet: number, Prize: number, Seconds: number }
 
 export type DuelStatePayload = {
 	State: "InviteSent" | "Declined" | "Unavailable" | "Countdown" | "Fight" | "End",
 	Opponent: Player?,
-	Seconds: number?, -- solo en "Countdown"
+	Seconds: number?, -- en "Countdown" (cuenta regresiva) y en "InviteSent" (tiempo para aceptar)
 	EndsAt: number?, -- solo en "Fight": workspace:GetServerTimeNow() en que termina por tiempo
 	Winner: Player?, -- solo en "End" (nil = empate)
 	Reason: EndReason?, -- solo en "End"
+	Mode: Mode?, -- modo del desafío / duelo
+	Bet: number?, -- apuesta por jugador (0 = informal)
+	Prize: number?, -- en "End": oro que cobró el ganador (0 si no hubo apuesta o fue empate)
+	Message: string?, -- en "Unavailable": motivo para mostrar
 }
 
 -- ── Tuning ──
-local INVITE_TTL = 15
+local INVITE_TTL = DuelRules.INVITE_TTL
 local REQUEST_COOLDOWN = 3
 local COUNTDOWN_SECONDS = 3
 local DUEL_TIMEOUT = 120
@@ -61,6 +81,7 @@ local WALL_HEIGHT = 20
 local duelsByPlayer: { [Player]: Duel } = {}
 local invites: { [Player]: Invite } = {} -- clave: jugador desafiado
 local lastRequestAt: { [Player]: number } = {}
+local lastOpponent: { [Player]: Player } = {} -- para permitir la revancha fuera de la arena
 local usedSlots: { [number]: boolean } = {}
 
 local ArenaService = {}
@@ -170,6 +191,16 @@ local function endDuel(duel: Duel, winner: Player?, reason: EndReason)
 		connection:Disconnect()
 	end
 
+	-- Apuesta: premio al ganador, o devolución si fue empate.
+	local prize = 0
+	if duel.bet > 0 then
+		if winner then
+			prize = DuelWagerService.Payout(winner, duel.bet)
+		else
+			DuelWagerService.Refund(duel.players, duel.bet)
+		end
+	end
+
 	for _, player in duel.players do
 		duelsByPlayer[player] = nil
 		if player.Parent == Players then
@@ -180,6 +211,9 @@ local function endDuel(duel: Duel, winner: Player?, reason: EndReason)
 			Opponent = otherPlayer(duel, player),
 			Winner = winner,
 			Reason = reason,
+			Mode = duel.mode,
+			Bet = duel.bet,
+			Prize = prize,
 		})
 	end
 
@@ -201,10 +235,22 @@ local function endDuel(duel: Duel, winner: Player?, reason: EndReason)
 	end)
 end
 
-local function startDuel(a: Player, b: Player)
+local function startDuel(a: Player, b: Player, mode: Mode, bet: number)
 	local _, rootA = getAliveParts(a)
 	local _, rootB = getAliveParts(b)
 	if not rootA or not rootB then
+		return
+	end
+
+	-- Modo "Duel": se cobra la apuesta a los dos antes de empezar (todo o nada).
+	if bet > 0 and not DuelWagerService.Escrow(a, b, bet) then
+		for _, player in { a, b } do
+			sendState(player, {
+				State = "Unavailable",
+				Opponent = if player == a then b else a,
+				Message = `Alguno de los dos no tiene {bet} de oro para apostar`,
+			})
+		end
 		return
 	end
 
@@ -218,7 +264,10 @@ local function startDuel(a: Player, b: Player)
 		arena = arena,
 		returnCFrames = { [a] = rootA.CFrame, [b] = rootB.CFrame },
 		connections = {},
+		mode = mode,
+		bet = bet,
 	}
+	lastOpponent[a], lastOpponent[b] = b, a
 
 	for index, player in duel.players do
 		duelsByPlayer[player] = duel
@@ -245,6 +294,8 @@ local function startDuel(a: Player, b: Player)
 			State = "Countdown",
 			Opponent = otherPlayer(duel, player),
 			Seconds = COUNTDOWN_SECONDS,
+			Mode = mode,
+			Bet = bet,
 		})
 	end
 
@@ -266,7 +317,7 @@ end
 
 -- ── Remotes ──
 
-local function onDuelRequest(challenger: Player, target: unknown)
+local function onDuelRequest(challenger: Player, target: unknown, options: unknown)
 	if typeof(target) ~= "Instance" or not target:IsA("Player") or target == challenger then
 		return
 	end
@@ -278,27 +329,57 @@ local function onDuelRequest(challenger: Player, target: unknown)
 	end
 	lastRequestAt[challenger] = now
 
+	local function refuse(message: string)
+		sendState(challenger, { State = "Unavailable", Opponent = target, Message = message })
+	end
+
+	-- Modo y apuesta. Sin opciones (clientes viejos) = informal.
+	local opts = if typeof(options) == "table" then options :: { [string]: unknown } else {}
+	local mode: Mode = if DuelRules.IsMode(opts.Mode) then (opts.Mode :: any) :: Mode else "Informal"
+	local bet = 0
+	if mode == "Duel" then
+		local valid = DuelRules.ValidBet(opts.Bet)
+		if not valid then
+			refuse(`La apuesta debe ser entre {DuelRules.MIN_BET} y {DuelRules.MAX_BET} de oro`)
+			return
+		end
+		bet = valid
+	end
+
+	-- Solo se desafía parado en la arena del lobby (la revancha al último rival, desde donde sea).
+	local _, root = getAliveParts(challenger)
+	if lastOpponent[challenger] ~= target and not (root and DuelRules.InZone(root.Position, 4)) then
+		refuse("Tenés que estar en la arena de duelos para desafiar")
+		return
+	end
+
 	if not isAvailable(challenger) or not isAvailable(target) then
-		sendState(challenger, { State = "Unavailable", Opponent = target })
+		refuse(`{target.DisplayName} no está disponible ahora (o vos no lo estás)`)
+		return
+	end
+	if bet > 0 and not DuelWagerService.CanAfford(challenger, bet) then
+		refuse(`No tenés {bet} de oro para apostar`)
 		return
 	end
 
 	-- Desafío cruzado (p. ej. los dos pidieron revancha): empieza sin esperar respuesta.
 	local reverse = invites[challenger]
-	if reverse and reverse.from == target and reverse.expiresAt > now then
+	if reverse and reverse.from == target and reverse.expiresAt > now and reverse.mode == mode and reverse.bet == bet then
 		invites[challenger] = nil
-		startDuel(target, challenger)
+		startDuel(target, challenger, mode, bet)
 		return
 	end
 
 	local pending = invites[target]
-	if pending and pending.expiresAt > now then
-		return -- ya tiene un desafío pendiente
+	if pending and pending.expiresAt > now and pending.from ~= challenger then
+		refuse(`{target.DisplayName} ya tiene un desafío pendiente`)
+		return
 	end
 
-	invites[target] = { from = challenger, expiresAt = now + INVITE_TTL }
-	Remotes.GetEvent("DuelInvite"):FireClient(target, challenger)
-	sendState(challenger, { State = "InviteSent", Opponent = target })
+	invites[target] = { from = challenger, expiresAt = now + INVITE_TTL, mode = mode, bet = bet }
+	local info: DuelInviteInfo = { Mode = mode, Bet = bet, Prize = if bet > 0 then DuelRules.Prize(bet) else 0, Seconds = INVITE_TTL }
+	Remotes.GetEvent("DuelInvite"):FireClient(target, challenger, info)
+	sendState(challenger, { State = "InviteSent", Opponent = target, Seconds = INVITE_TTL, Mode = mode, Bet = bet })
 end
 
 local function onDuelResponse(target: Player, challenger: unknown, accepted: unknown)
@@ -317,12 +398,20 @@ local function onDuelResponse(target: Player, challenger: unknown, accepted: unk
 	end
 
 	if accepted ~= true then
-		sendState(challenger, { State = "Declined", Opponent = target })
+		sendState(challenger, { State = "Declined", Opponent = target, Mode = invite.mode, Bet = invite.bet })
 		return
 	end
 
 	if isAvailable(challenger) and isAvailable(target) then
-		startDuel(challenger, target)
+		startDuel(challenger, target, invite.mode, invite.bet)
+	else
+		for _, player in { challenger, target } do
+			sendState(player, {
+				State = "Unavailable",
+				Opponent = if player == target then challenger else target,
+				Message = "El duelo no pudo empezar (alguno está ocupado)",
+			})
+		end
 	end
 end
 
@@ -343,6 +432,7 @@ function ArenaService:Init()
 
 	Players.PlayerRemoving:Connect(function(player)
 		lastRequestAt[player] = nil
+		lastOpponent[player] = nil
 		invites[player] = nil
 		for target, invite in invites do
 			if invite.from == player then

@@ -115,6 +115,30 @@ function Kit.brazier(parent: Instance, base: Vector3, scale: number?)
 	Sounds.Torch(coals)
 end
 
+-- Cuenco de fuego para poner sobre un pedestal (sin columna). `top` = superficie donde apoya.
+function Kit.fireBowl(parent: Instance, top: Vector3, scale: number?)
+	local s = scale or 1
+	local c = Kit.Colors
+	Kit.cylinder(parent, "Pie", top + Vector3.new(0, 0.2 * s, 0), 0.4 * s, 1.4 * s, c.Iron, Enum.Material.Metal)
+	Kit.cylinder(parent, "Cuenco", top + Vector3.new(0, 0.85 * s, 0), 0.9 * s, 2.5 * s, Color3.fromRGB(150, 110, 50), Enum.Material.Metal)
+	Kit.cylinder(parent, "Borde", top + Vector3.new(0, 1.32 * s, 0), 0.18 * s, 2.75 * s, c.Gold, Enum.Material.Foil, false)
+	local coals = Kit.cylinder(parent, "Brasas", top + Vector3.new(0, 1.3 * s, 0), 0.2, 2.2 * s, Color3.fromRGB(255, 120, 40), Enum.Material.Neon, false)
+	fire(coals, 4.5 * s)
+	light(coals, Color3.fromRGB(255, 160, 70), 20 * s, 2.2)
+	Kit.embers(coals, 5 * s)
+	Sounds.Torch(coals)
+end
+
+-- Farolito (sin sonido): base de hierro, vidrio que brilla y luz cálida corta. `cf` = apoyo.
+function Kit.lantern(parent: Instance, cf: CFrame)
+	local c = Kit.Colors
+	Kit.part(parent, "Farol", cf * CFrame.new(0, 0.1, 0), Vector3.new(0.7, 0.2, 0.7), c.Iron, Enum.Material.Metal, false)
+	local glass = Kit.part(parent, "Vidrio", cf * CFrame.new(0, 0.55, 0), Vector3.new(0.5, 0.7, 0.5), Color3.fromRGB(255, 196, 110), Enum.Material.Neon, false)
+	glass.Transparency = 0.15
+	Kit.part(parent, "Techo", cf * CFrame.new(0, 1.0, 0), Vector3.new(0.75, 0.2, 0.75), c.Iron, Enum.Material.Metal, false)
+	light(glass, Color3.fromRGB(255, 180, 90), 9, 1.1)
+end
+
 -- Emblema de espadas cruzadas sobre un escudo, dibujado en una SurfaceGui.
 local function emblem(gui: SurfaceGui, color: Color3)
 	local holder = Instance.new("Frame")

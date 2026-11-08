@@ -45,6 +45,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local Data = require(script.Parent:WaitForChild("DataService"))
 local Sounds = require(script.Parent:WaitForChild("Util"):WaitForChild("Sounds"))
+local Layout = require(script.Parent:WaitForChild("Lobby"):WaitForChild("Layout"))
 local DungeonService = {}
 local random = Random.new()
 
@@ -653,16 +654,15 @@ function DungeonService:Init()
 	dungeonFolder = dungeon
 	local spawn = workspace:FindFirstChildWhichIsA("SpawnLocation", true)
 	local origin = if spawn then spawn.Position else Vector3.zero
-	local ground = if spawn then origin.Y - spawn.Size.Y / 2 else 0
 	roomsOrigin = origin + Vector3.new(0, 160, 0)
 	dungeon.Parent = workspace
 
-	-- Entrada en el lobby: arco grande mirando al spawn, con braseros a los costados y un cartel.
+	-- Entrada en el lobby: arco grande mirando al camino, con braseros a los costados y un cartel.
 	local entrance = Instance.new("Folder")
 	entrance.Name = "Entrada"
 	entrance.Parent = dungeon
-	local gateBase = Vector3.new(origin.X + 14, ground, origin.Z)
-	local gate = CFrame.lookAt(gateBase, Vector3.new(origin.X, ground, origin.Z))
+	-- Posición según el plano del lobby (Lobby/Layout): noreste, mirando al camino.
+	local gate = Layout.Facing(Layout.DUNGEON)
 	lobbyReturn = (gate * CFrame.new(0, 3, -5)).Position -- delante del arco
 	local veil, prompt = portal(entrance, "Entrar", gate, 6, 9)
 	for _, side in { -1, 1 } do
