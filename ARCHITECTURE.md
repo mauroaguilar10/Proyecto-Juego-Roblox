@@ -76,6 +76,18 @@ y `CombatService` (duelos) antes de `TakeDamage`.
 **Barra de vida (HealthHUD, B):** reemplaza la de Roblox (`SetCoreGuiEnabled(Health, false)`): "vida/máx HP"
 dentro de la barra y color según el %. La tienda de armas ya no tiene botón en el HUD: se abre desde su puesto.
 
+**Tienda de Robux (MonetizationService / PremiumShopController, B):** catálogo en `Shared/StoreData`
+(productos de desarrollador: set de la Tormenta, Hoja del Fénix, Martillo del Trueno, potenciadores
+Oro x2 y Daño x2 de 10 min y paquetes de oro). `MonetizationService` es el **único** que define
+`MarketplaceService.ProcessReceipt`: anota cada `PurchaseId` en el perfil (`receipts`, no se entrega dos
+veces), guarda y recién ahí devuelve `PurchaseGranted`. Armas con `Acquisition = "Robux"` y sets con
+`Acquisition = "Robux"` solo se entregan por ahí (ShopService/ArmorService no los venden por oro).
+El set del Vacío (`Acquisition = "VoidPass"`) se tiene mientras se tenga el Void Pass (`DataService.OwnsArmor`).
+Potenciadores: vencen en `os.time()` (perfil `boosts`) y se publican como `Player.GoldBoostUntil` /
+`Player.DamageBoostUntil` (`number`, tiempo de `workspace:GetServerTimeNow()`, 0 = inactivo).
+"Oro x2" se multiplica con el Void Pass en `DataService.GoldMultiplier`; "Daño x2" lo aplica `CombatService`
+solo contra enemigos (no jugadores).
+
 **Códigos (CodeService, B):** remote `RedeemCode` (C→S→C, devuelve `ok, mensaje`). Los códigos viven solo
 en el servidor; cada uno se canjea una vez por jugador (`redeemed` en el perfil). Un código puede dar oro o
 el Void Pass; un pase dado por código se guarda en `bonusPasses` del perfil y se reactiva en cada entrada

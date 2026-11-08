@@ -60,10 +60,25 @@ local function hiddenFolder(player: Player): Folder
 	return created
 end
 
+-- Lo equipado que el jugador realmente tiene (una pieza del Void Pass sin el pase no cuenta).
+local function effectiveEquipped(player: Player): { [string]: string }
+	local p = Data.Profile(player)
+	local out = {}
+	if not p then return out end
+	for slot, id in p.armorEquipped do
+		if Data.OwnsArmor(player, id) then out[slot] = id end
+	end
+	return out
+end
+
 local function state(player: Player): any
 	local p = Data.Profile(player)
 	if not p then return nil end
-	return { owned = table.clone(p.armorOwned), equipped = table.clone(p.armorEquipped) }
+	local owned = {}
+	for id in ArmorData.Pieces do
+		if Data.OwnsArmor(player, id) then owned[id] = true end
+	end
+	return { owned = owned, equipped = effectiveEquipped(player) }
 end
 
 -- Pone en el personaje exactamente lo que está equipado en el perfil.
@@ -72,7 +87,7 @@ local function apply(player: Player)
 	local character = player.Character
 	local humanoid = if character then character:FindFirstChildOfClass("Humanoid") else nil
 	if not p or not character or not humanoid then return end
-	local equipped = p.armorEquipped
+	local equipped = effectiveEquipped(player)
 	local folder = hiddenFolder(player)
 
 	-- Accesorios: devolver los de lugares libres, esconder los que chocan con lo puesto.
@@ -164,14 +179,16 @@ local function handle(player: Player, action: any, id: any): (boolean, string, a
 	if not piece then return false, "Pieza desconocida.", state(player) end
 
 	if action == "Buy" then
-		if p.armorOwned[piece.Id] then return false, "Ya tenés esta pieza.", state(player) end
+		if Data.OwnsArmor(player, piece.Id) then return false, "Ya tenés esta pieza.", state(player) end
+		if piece.Acquisition == "VoidPass" then return false, "Este set viene con el Void Pass.", state(player) end
+		if piece.Acquisition == "Robux" then return false, "Este set se consigue en la Tienda (Robux).", state(player) end
 		if not Data.ChangeGold(player, -piece.Price) then return false, "Oro insuficiente.", state(player) end
 		p.armorOwned[piece.Id] = true
 		p.armorEquipped[piece.Slot] = piece.Id
 		apply(player)
 		return true, `Compraste {piece.DisplayName}: +{piece.Health} de vida y +{math.round(piece.Armor * 100)}% de armadura.`, state(player)
 	elseif action == "Equip" then
-		if not p.armorOwned[piece.Id] then return false, "Todavía no tenés esta pieza.", state(player) end
+		if not Data.OwnsArmor(player, piece.Id) then return false, "Todavía no tenés esta pieza.", state(player) end
 		p.armorEquipped[piece.Slot] = piece.Id
 		apply(player)
 		return true, `Te pusiste {piece.DisplayName}.`, state(player)

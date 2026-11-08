@@ -13,8 +13,11 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local ArmorData = require(Shared:WaitForChild("ArmorData"))
-local ArmorArt = require(Shared:WaitForChild("ArmorArt"))
 local Sounds = require(script.Parent:WaitForChild("Util"):WaitForChild("Sounds"))
+local Signals = require(script.Parent:WaitForChild("Util"):WaitForChild("Signals"))
+local ArmorPreview = require(script.Parent:WaitForChild("Util"):WaitForChild("ArmorPreview"))
+local WeaponData = require(Shared:WaitForChild("WeaponData"))
+local MarketplaceService = game:GetService("MarketplaceService")
 local ArmorController = {}
 
 local INK = Color3.fromRGB(15, 19, 26)
@@ -28,6 +31,12 @@ local SET_COLORS: { [string]: Color3 } = {
 	Leather = Color3.fromRGB(196, 150, 100),
 	Steel = Color3.fromRGB(190, 200, 215),
 	Ember = Color3.fromRGB(255, 130, 60),
+	Storm = Color3.fromRGB(120, 220, 255),
+	Void = Color3.fromRGB(215, 120, 255),
+}
+local ACQUISITION_TAG: { [string]: string } = {
+	Robux = "  ·  Tienda (Robux)",
+	VoidPass = "  ·  Incluido en el Void Pass",
 }
 
 local function frame(parent: Instance, pos: UDim2, size: UDim2, color: Color3): Frame
@@ -51,58 +60,6 @@ end
 local function stroke(obj: GuiObject, color: Color3)
 	local s = Instance.new("UIStroke")
 	s.ApplyStrokeMode, s.Color, s.Parent = Enum.ApplyStrokeMode.Border, color, obj
-end
-
--- Maniquí gris con partes R15 (los mismos nombres que usa ArmorArt).
-local MANNEQUIN: { [string]: { Vector3 } } = {
-	Head = { Vector3.new(1.2, 1.2, 1.2), Vector3.new(0, 4.6, 0) },
-	UpperTorso = { Vector3.new(2, 1.6, 1), Vector3.new(0, 3.2, 0) },
-	LowerTorso = { Vector3.new(2, 0.4, 1), Vector3.new(0, 2.2, 0) },
-	LeftUpperArm = { Vector3.new(1, 1.2, 1), Vector3.new(-1.5, 3.4, 0) },
-	RightUpperArm = { Vector3.new(1, 1.2, 1), Vector3.new(1.5, 3.4, 0) },
-	LeftLowerArm = { Vector3.new(1, 1.1, 1), Vector3.new(-1.5, 2.25, 0) },
-	RightLowerArm = { Vector3.new(1, 1.1, 1), Vector3.new(1.5, 2.25, 0) },
-	LeftUpperLeg = { Vector3.new(1, 1.2, 1), Vector3.new(-0.5, 1.4, 0) },
-	RightUpperLeg = { Vector3.new(1, 1.2, 1), Vector3.new(0.5, 1.4, 0) },
-	LeftLowerLeg = { Vector3.new(1, 1.1, 1), Vector3.new(-0.5, 0.25, 0) },
-	RightLowerLeg = { Vector3.new(1, 1.1, 1), Vector3.new(0.5, 0.25, 0) },
-	LeftFoot = { Vector3.new(1, 0.3, 1), Vector3.new(-0.5, -0.45, 0) },
-	RightFoot = { Vector3.new(1, 0.3, 1), Vector3.new(0.5, -0.45, 0) },
-}
-
-local function preview(parent: GuiObject, pieceId: string, slot: string)
-	local view = Instance.new("ViewportFrame")
-	view.Size = UDim2.new(1, -8, 1, -76)
-	view.Position = UDim2.fromOffset(4, 4)
-	view.BackgroundTransparency = 1
-	view.Ambient = Color3.fromRGB(150, 150, 160)
-	view.LightColor = Color3.fromRGB(255, 240, 220)
-	view.LightDirection = Vector3.new(-0.5, -0.8, 0.6)
-	view.Parent = parent
-	local body = Instance.new("Model")
-	for name, spec in MANNEQUIN do
-		local p = Instance.new("Part")
-		p.Name, p.Size, p.Anchored = name, spec[1], true
-		p.CFrame = CFrame.new(spec[2])
-		p.Color, p.Material = Color3.fromRGB(96, 100, 108), Enum.Material.SmoothPlastic
-		p.Parent = body
-	end
-	body.Parent = view
-	local armor = ArmorArt.Build(pieceId, slot, body)
-	for _, d in armor:GetDescendants() do
-		if d:IsA("BasePart") then d.Anchored = true elseif d:IsA("Weld") or d:IsA("Light") then d:Destroy() end
-	end
-	armor.Parent = view
-	-- Encuadre de 3/4 sobre la pieza.
-	local box, size = armor:GetBoundingBox()
-	local radius = math.max(size.X, size.Y, size.Z) * 0.62
-	local camera = Instance.new("Camera")
-	camera.FieldOfView = 40
-	local distance = radius / math.tan(math.rad(20)) + 0.5
-	local dir = Vector3.new(math.sin(math.rad(-28)), 0.25, -math.cos(math.rad(28))).Unit
-	camera.CFrame = CFrame.lookAt(box.Position + dir * distance, box.Position)
-	view.CurrentCamera = camera
-	camera.Parent = view
 end
 
 type Card = { piece: ArmorData.ArmorPiece, action: TextButton, border: UIStroke }
@@ -166,6 +123,12 @@ function ArmorController:Init()
 			elseif owned[p.Id] then
 				card.action.Text = "Equipar"
 				card.action.BackgroundColor3 = Color3.fromRGB(46, 64, 100)
+			elseif p.Acquisition == "Robux" then
+				card.action.Text = "Tienda (Robux)"
+				card.action.BackgroundColor3 = Color3.fromRGB(30, 100, 70)
+			elseif p.Acquisition == "VoidPass" then
+				card.action.Text = "★ Void Pass"
+				card.action.BackgroundColor3 = Color3.fromRGB(70, 34, 100)
 			else
 				card.action.Text = `Comprar · {p.Price} oro`
 				card.action.BackgroundColor3 = Color3.fromRGB(92, 68, 28)
@@ -195,10 +158,11 @@ function ArmorController:Init()
 	end
 
 	-- Una fila por set, con sus tres piezas en orden Casco / Pechera / Pantalón.
+	local show: (boolean) -> () -- se define más abajo
 	for setIndex, set in ArmorData.SETS do
 		local row = frame(list, UDim2.new(), UDim2.new(1, -6, 0, 268), SLATE)
 		row.BackgroundTransparency, row.LayoutOrder = 0.4, setIndex
-		text(row, set.Name, UDim2.fromOffset(12, 4), UDim2.new(1, -24, 0, 26), Enum.Font.Antique, 22, SET_COLORS[set.Id] or IVORY)
+		text(row, set.Name .. (ACQUISITION_TAG[set.Acquisition] or ""), UDim2.fromOffset(12, 4), UDim2.new(1, -24, 0, 26), Enum.Font.Antique, 22, SET_COLORS[set.Id] or IVORY)
 		local cardsHolder = frame(row, UDim2.fromOffset(8, 34), UDim2.new(1, -16, 1, -42), SLATE)
 		cardsHolder.BackgroundTransparency = 1
 		local grid = Instance.new("UIGridLayout")
@@ -216,7 +180,7 @@ function ArmorController:Init()
 			card.LayoutOrder, card.ClipsDescendants = slotIndex, true
 			local border = Instance.new("UIStroke")
 			border.ApplyStrokeMode, border.Color, border.Parent = Enum.ApplyStrokeMode.Border, EDGE, card
-			preview(card, p.Id, p.Slot)
+			ArmorPreview.draw(card, { p.Id }, 72)
 			text(card, p.DisplayName, UDim2.new(0, 8, 1, -72), UDim2.new(1, -16, 0, 20), Enum.Font.GothamBold, 15, IVORY)
 			local info = text(card, `{ArmorData.SLOT_NAMES[p.Slot]} · <font color="#78D278">+{p.Health} HP</font> · <font color="#7AA8E6">+{math.round(p.Armor * 100)}%</font>`,
 				UDim2.new(0, 8, 1, -52), UDim2.new(1, -16, 0, 16), Enum.Font.Gotham, 13, MUTED)
@@ -232,6 +196,12 @@ function ArmorController:Init()
 					call("Unequip", p.Id)
 				elseif owned[p.Id] then
 					call("Equip", p.Id)
+				elseif p.Acquisition == "Robux" then
+					show(false)
+					Signals.OpenPremiumShop:Fire("Sets")
+				elseif p.Acquisition == "VoidPass" then
+					local passId = WeaponData.Weapons.VoidScythe.GamePassId
+					if passId and passId > 0 then MarketplaceService:PromptGamePassPurchase(player, passId) end
 				else
 					call("Buy", p.Id)
 				end
@@ -239,7 +209,7 @@ function ArmorController:Init()
 		end
 	end
 
-	local function show(open: boolean)
+	show = function(open: boolean)
 		gui.Enabled = open
 		if open then
 			message.Text = ""

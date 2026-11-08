@@ -463,7 +463,8 @@ function CombatAnimations.SetMode(character: Model, mode: GuardMode)
 	returnToBase(rig, MODE_TWEEN[mode])
 end
 
-function CombatAnimations.PlayWindup(character: Model, combo: number, duration: number)
+-- `custom`: pose de carga propia del arma (armas especiales, ver CombatStyles).
+function CombatAnimations.PlayWindup(character: Model, combo: number, duration: number, custom: Pose?)
 	local rig = getRig(character)
 	if not rig then
 		return
@@ -471,18 +472,39 @@ function CombatAnimations.PlayWindup(character: Model, combo: number, duration: 
 	rig.mode = "None"
 	rig.token += 1
 	rig.busy = true
-	apply(rig, POSES.Windup[combo] or POSES.Windup[1], duration, Enum.EasingStyle.Quad)
+	apply(rig, custom or POSES.Windup[combo] or POSES.Windup[1], duration, Enum.EasingStyle.Quad)
 end
 
-function CombatAnimations.PlaySlash(character: Model, combo: number, weight: Weight)
+-- `custom`: secuencia de poses propia del arma (p. ej. el giro de la guadaña); cada paso dura
+-- lo mismo que un tajo normal y solo el último se sostiene.
+-- El golpe es instantáneo en el servidor, así que la carga se muestra como un amague muy corto
+-- (WINDUP_FLASH) antes del tajo; `windup` = pose de carga propia del arma.
+local WINDUP_FLASH = 0.05
+
+function CombatAnimations.PlaySlash(character: Model, combo: number, weight: Weight, custom: { Pose }?, windup: Pose?)
 	local rig = getRig(character)
 	if not rig then
 		return
 	end
 	rig.mode = "None"
-	play(rig, {
-		{ pose = POSES.Slash[combo] or POSES.Slash[1], duration = SLASH_TIME[weight], style = Enum.EasingStyle.Quart, hold = SLASH_HOLD },
-	}, true)
+	local steps: { Step } = {
+		{ pose = windup or POSES.Windup[combo] or POSES.Windup[1], duration = WINDUP_FLASH, style = Enum.EasingStyle.Quad },
+	}
+	if custom and #custom > 0 then
+		for i, pose in custom do
+			local last = i == #custom
+			table.insert(steps, {
+				pose = pose,
+				duration = SLASH_TIME[weight],
+				style = if #custom == 1 then Enum.EasingStyle.Quart else Enum.EasingStyle.Linear,
+				hold = if last then SLASH_HOLD else nil,
+			})
+		end
+		play(rig, steps, true)
+		return
+	end
+	table.insert(steps, { pose = POSES.Slash[combo] or POSES.Slash[1], duration = SLASH_TIME[weight], style = Enum.EasingStyle.Quart, hold = SLASH_HOLD })
+	play(rig, steps, true)
 end
 
 -- Impacto corto sobre la pose actual: ida rápida y vuelta a la base.

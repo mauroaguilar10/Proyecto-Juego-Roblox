@@ -20,7 +20,9 @@ local ArmorData = require(Shared:WaitForChild("ArmorData"))
 
 type Profile = {gold: number, owned: {[string]: boolean}, equipped: string, bestWave: number, kills: number,
 	redeemed: {[string]: boolean}, bonusPasses: {[string]: boolean},
-	armorOwned: {[string]: boolean}, armorEquipped: {[string]: string}}
+	armorOwned: {[string]: boolean}, armorEquipped: {[string]: string},
+	boosts: {[string]: number}, -- potenciador → os.time() en que vence ("Gold", "Damage")
+	receipts: {[string]: boolean}} -- compras de Robux ya entregadas (PurchaseId)
 type Session = {profile: Profile?, token: string, closing: boolean, saving: boolean, lease: number}
 local sessions: {[Player]: Session} = {}
 local memoryOnly = RunService:IsStudio() and game.GameId == 0
@@ -81,12 +83,20 @@ local function decode(raw: any): Profile
 	if typeof(data.armorEquipped) == "table" then
 		for slot, id in data.armorEquipped do
 			local piece = ArmorData.Get(id)
-			if piece and piece.Slot == slot and armorOwned[id] then armorEquipped[slot] = id end
+			-- Las del Void Pass no están en armorOwned: su dueño se comprueba en el momento (OwnsArmor).
+			if piece and piece.Slot == slot and (armorOwned[id] or piece.Acquisition == "VoidPass") then
+				armorEquipped[slot] = id
+			end
 		end
 	end
 	return {
 		armorOwned = armorOwned,
 		armorEquipped = armorEquipped,
+		boosts = {
+			Gold = if typeof(data.boosts) == "table" then count(data.boosts.Gold) else 0,
+			Damage = if typeof(data.boosts) == "table" then count(data.boosts.Damage) else 0,
+		},
+		receipts = flags(data.receipts),
 		gold = count(data.gold),
 		owned = owned,
 		equipped = if typeof(equipped) == "string" and owned[equipped] then equipped else WeaponData.DEFAULT_WEAPON,
@@ -209,8 +219,56 @@ function DataService.MarkRedeemed(player: Player, code: string)
 end
 
 -- Multiplicador del oro que da la mazmorra (x2 con el Pase del Vacío).
+-- Se multiplican: Void Pass (x2) y potenciador "Oro x2" (x2) juntos dan x4.
 function DataService.GoldMultiplier(player: Player): number
-	return if DataService.OwnsPass(player, VOID_PASS) then VOID_GOLD_MULTIPLIER else 1
+	local multiplier = if DataService.OwnsPass(player, VOID_PASS) then VOID_GOLD_MULTIPLIER else 1
+	local p = DataService.Profile(player)
+	if p and (p.boosts.Gold or 0) > os.time() then multiplier *= 2 end
+	return multiplier
+end
+
+-- ── Potenciadores (tienda de Robux) ──
+-- El vencimiento se guarda en os.time() (sirve entre servidores) y se publica para el cliente como
+-- Player.GoldBoostUntil / Player.DamageBoostUntil en workspace:GetServerTimeNow() (0 = sin potenciador).
+local BOOST_ATTRIBUTES = { Gold = "GoldBoostUntil", Damage = "DamageBoostUntil" }
+
+local function publishBoosts(player: Player, profile: Profile)
+	local now = os.time()
+	for kind, attribute in BOOST_ATTRIBUTES do
+		local expires = profile.boosts[kind] or 0
+		player:SetAttribute(attribute, if expires > now then workspace:GetServerTimeNow() + (expires - now) else 0)
+	end
+end
+
+-- Suma `seconds` al potenciador (si ya estaba activo, se extiende). false si el perfil no cargó.
+function DataService.AddBoost(player: Player, kind: string, seconds: number): boolean
+	local p = DataService.Profile(player)
+	if not p or not BOOST_ATTRIBUTES[kind] or seconds <= 0 then return false end
+	p.boosts[kind] = math.max(p.boosts[kind] or 0, os.time()) + math.floor(seconds)
+	publishBoosts(player, p)
+	return true
+end
+
+-- ── Armaduras ──
+-- Una pieza es tuya si la compraste, o si es del set del Void Pass y tenés el pase.
+function DataService.OwnsArmor(player: Player, pieceId: string): boolean
+	local p = DataService.Profile(player)
+	local piece = ArmorData.Get(pieceId)
+	if not p or not piece then return false end
+	if piece.Acquisition == "VoidPass" then return DataService.OwnsPass(player, VOID_PASS) end
+	return p.armorOwned[pieceId] == true
+end
+
+-- ── Compras de Robux ──
+function DataService.HasReceipt(player: Player, purchaseId: string): boolean?
+	local p = DataService.Profile(player)
+	if not p then return nil end
+	return p.receipts[purchaseId] == true
+end
+
+function DataService.MarkReceipt(player: Player, purchaseId: string)
+	local p = DataService.Profile(player)
+	if p then p.receipts[purchaseId] = true end
 end
 
 function DataService.IsPersistent(): boolean
@@ -240,6 +298,7 @@ local function save(player: Player, s: Session, release: boolean)
 			bestWave = profile.bestWave, kills = profile.kills,
 			redeemed = table.clone(profile.redeemed), bonusPasses = table.clone(profile.bonusPasses),
 			armorOwned = table.clone(profile.armorOwned), armorEquipped = table.clone(profile.armorEquipped),
+			boosts = table.clone(profile.boosts), receipts = table.clone(profile.receipts),
 			owner = if release then nil else s.token, expires = if release then 0 else expires}
 		local ok, result = pcall(function()
 			return (store :: GlobalDataStore):UpdateAsync(key, function(old: any)
@@ -265,6 +324,12 @@ local function save(player: Player, s: Session, release: boolean)
 	s.saving = false
 end
 
+-- Guarda ya (sin soltar la sesión). Lo usa MonetizationService después de entregar una compra.
+function DataService.SaveNow(player: Player)
+	local s = sessions[player]
+	if s and not s.closing then save(player, s, false) end
+end
+
 local function loadPlayer(player: Player)
 	if sessions[player] then return end
 	local s: Session = {profile = nil, token = HttpService:GenerateGUID(false), closing = false, saving = false, lease = 0}
@@ -272,6 +337,8 @@ local function loadPlayer(player: Player)
 	player:SetAttribute("EquippedWeapon", WeaponData.DEFAULT_WEAPON)
 	player:SetAttribute("Gold", 0)
 	player:SetAttribute("VoidPass", false) -- true cuando se verifica el Pase del Vacío (lo lee UIController)
+	player:SetAttribute("GoldBoostUntil", 0)
+	player:SetAttribute("DamageBoostUntil", 0)
 	local profile: Profile? = nil
 	local failure = "sesión cerrada durante la carga"
 	if memoryOnly then
@@ -318,6 +385,7 @@ local function loadPlayer(player: Player)
 	end
 	player:SetAttribute("Gold", profile.gold)
 	createLeaderstats(player, profile)
+	publishBoosts(player, profile)
 	if player:GetAttribute("InDuel") ~= true then player:SetAttribute("EquippedWeapon", profile.equipped) end
 end
 

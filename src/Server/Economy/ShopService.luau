@@ -32,6 +32,8 @@ local function useWeapon(player: Player, requested: any, purchase: boolean): (bo
 	end
 	if purchase then
 		if p.owned[requested] then return true, "El arma ya está en tu inventario." end
+		-- Las armas de Robux se entregan solo desde MonetizationService (ProcessReceipt).
+		if weapon.Acquisition == "Robux" then return false, "Esta arma se consigue en la Tienda (Robux)." end
 		if weapon.Acquisition == "Gold" and not Data.ChangeGold(player, -weapon.Price) then
 			return false, "Oro insuficiente."
 		end
