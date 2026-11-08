@@ -44,9 +44,13 @@ export type Weight = "Light" | "Medium" | "Heavy"
 
 type Step = { pose: Pose, duration: number, style: Enum.EasingStyle, hold: number? }
 type FreezeEntry = { untilTime: number, speeds: { [AnimationTrack]: number }, tweens: { Tween } }
+-- Articulación animable. Motor6D clásico → se rota su C0. Con la mejora de articulaciones de
+-- Roblox (Workspace.AvatarJointUpgrade) son AnimationConstraint → se rota su Attachment0.CFrame,
+-- que cumple el mismo papel que C0 (el Animator escribe Transform en los dos casos).
+type Joint = { target: Instance, property: string, alive: Instance }
 type Rig = {
 	character: Model,
-	motors: { [JointName]: Motor6D },
+	motors: { [JointName]: Joint },
 	tweens: { Tween },
 	token: number, -- secuencia en curso (windup/tajo/impacto)
 	busy: boolean, -- true mientras una secuencia controla la pose
@@ -294,23 +298,61 @@ local MODE_TWEEN: { [GuardMode]: number } = { None = 0.2, Block = 0.08, Parry = 
 -- ══════════════════ Rig ══════════════════
 
 local rigs: { [Model]: Rig } = setmetatable({}, { __mode = "k" }) :: any
-local restC0: { [Motor6D]: CFrame } = setmetatable({}, { __mode = "k" }) :: any
+local restC0: { [Instance]: CFrame } = setmetatable({}, { __mode = "k" }) :: any
 local frozen: { [Model]: FreezeEntry } = setmetatable({}, { __mode = "k" }) :: any
+local warned: { [Model]: boolean } = setmetatable({}, { __mode = "k" }) :: any
 
 local CombatAnimations = {}
 CombatAnimations.Poses = POSES
 
-local function findMotors(character: Model): { [JointName]: Motor6D }
-	local motors: { [JointName]: Motor6D } = {}
+local function toJoint(instance: Instance?): Joint?
+	if not instance then
+		return nil
+	end
+	if instance:IsA("Motor6D") then
+		if not restC0[instance] then
+			restC0[instance] = instance.C0
+		end
+		return { target = instance, property = "C0", alive = instance }
+	elseif instance:IsA("AnimationConstraint") then
+		local attachment = instance.Attachment0
+		if not attachment then
+			return nil
+		end
+		if not restC0[attachment] then
+			restC0[attachment] = attachment.CFrame
+		end
+		return { target = attachment, property = "CFrame", alive = instance }
+	end
+	return nil
+end
+
+-- AnimationConstraint cuya Attachment1 está en `part` (por si no se llama igual que el Motor6D).
+local function constraintFor(character: Model, part: Instance): Instance?
+	for _, descendant in character:GetDescendants() do
+		if descendant:IsA("AnimationConstraint") then
+			local attachment = descendant.Attachment1
+			if attachment and attachment.Parent == part then
+				return descendant
+			end
+		end
+	end
+	return nil
+end
+
+local function findMotors(character: Model): { [JointName]: Joint }
+	local motors: { [JointName]: Joint } = {}
 	for joint, candidates in JOINT_CANDIDATES do
 		for _, candidate in candidates do
 			local part = character:FindFirstChild(candidate[1])
-			local motor = if part then part:FindFirstChild(candidate[2]) else nil
-			if motor and motor:IsA("Motor6D") then
-				if not restC0[motor] then
-					restC0[motor] = motor.C0
-				end
-				motors[joint] = motor
+			if not part then
+				continue
+			end
+			local found = toJoint(part:FindFirstChild(candidate[2]))
+				or toJoint(character:FindFirstChild(candidate[2], true))
+				or toJoint(constraintFor(character, part))
+			if found then
+				motors[joint] = found
 				break
 			end
 		end
@@ -322,13 +364,18 @@ local function getRig(character: Model): Rig?
 	local rig = rigs[character]
 	if rig then
 		local shoulder = rig.motors.RShoulder
-		if shoulder and shoulder.Parent then
+		if shoulder and shoulder.alive.Parent and shoulder.target.Parent then
 			return rig
 		end
 	end
 	local motors = findMotors(character)
 	if not motors.RShoulder then
-		return nil -- todavía no cargó el personaje
+		-- Todavía no cargó el personaje, o el rig no tiene articulaciones reconocibles.
+		if not warned[character] and character:FindFirstChildOfClass("Humanoid") and character:FindFirstChild("Head") then
+			warned[character] = true
+			warn(`[CombatAnimations] {character.Name}: no encontré el hombro derecho (Motor6D ni AnimationConstraint); no habrá poses.`)
+		end
+		return nil
 	end
 	local newRig: Rig = {
 		character = character,
@@ -344,8 +391,8 @@ local function getRig(character: Model): Rig?
 	return newRig
 end
 
-local function jointTarget(motor: Motor6D, rotation: JointRotation?): CFrame
-	local rest = restC0[motor]
+local function jointTarget(joint: Joint, rotation: JointRotation?): CFrame
+	local rest = restC0[joint.target]
 	if not rotation then
 		return rest
 	end
@@ -368,11 +415,11 @@ local function apply(rig: Rig, pose: Pose, duration: number, style: Enum.EasingS
 	stopTweens(rig)
 	local info = TweenInfo.new(math.max(duration, 0.01), style, Enum.EasingDirection.Out)
 	local last: Tween? = nil
-	for joint, motor in rig.motors do
-		if not motor.Parent then
+	for name, joint in rig.motors do
+		if not joint.alive.Parent or not joint.target.Parent then
 			continue
 		end
-		local tween = TweenService:Create(motor, info, { C0 = jointTarget(motor, pose[joint]) })
+		local tween = TweenService:Create(joint.target, info, { [joint.property] = jointTarget(joint, pose[name]) })
 		table.insert(rig.tweens, tween)
 		tween:Play()
 		last = tween
