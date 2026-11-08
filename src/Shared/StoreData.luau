@@ -35,7 +35,7 @@ local Products: { Product } = {
 		ArmorSet = "Storm",
 	},
 	{
-		Key = "PhoenixBlade", ProductId = 0, Category = "Armas", SuggestedPrice = 499,
+		Key = "PhoenixBlade", ProductId = 3729537758, Category = "Armas", SuggestedPrice = 499,
 		DisplayName = "Hoja del Fénix",
 		Description = "Espada de llamas vivas: fuego, brasas y una estela ardiente en cada golpe.",
 		WeaponId = "PhoenixBlade",

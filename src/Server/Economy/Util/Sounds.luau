@@ -67,20 +67,43 @@ function Sounds.PlayAt(name: string, position: Vector3, pitch: number?, volume: 
 	Debris:AddItem(anchor, EFFECTS[name].length / (pitch or 1) + 0.6)
 end
 
--- Crepitar de fuego en loop para una antorcha o brasero.
-function Sounds.Torch(parent: Instance)
+-- Todos los fuegos suenan por un mismo SoundGroup con compresor: aunque se escuchen muchas
+-- antorchas a la vez, la suma no satura (antes se "rompía" el audio cerca de la arena).
+local fireGroup: SoundGroup? = nil
+local function getFireGroup(): SoundGroup
+	if fireGroup and fireGroup.Parent then return fireGroup end
+	local SoundService = game:GetService("SoundService")
+	local group = Instance.new("SoundGroup")
+	group.Name = "Fuegos"
+	group.Volume = 0.6
+	local compressor = Instance.new("CompressorSoundEffect")
+	compressor.Threshold, compressor.Ratio = -24, 6
+	compressor.Attack, compressor.Release = 0.05, 0.4
+	compressor.GainMakeup = 0
+	compressor.Parent = group
+	local soften = Instance.new("EqualizerSoundEffect") -- recorta los agudos del chisporroteo
+	soften.HighGain, soften.MidGain, soften.LowGain = -8, -2, 0
+	soften.Parent = group
+	group.Parent = SoundService
+	fireGroup = group
+	return group
+end
+
+-- Crepitar de fuego en loop para una antorcha o brasero (sutil: solo se oye de cerca).
+function Sounds.Torch(parent: Instance, volume: number?)
 	local id = asset(IDS.Antorcha)
 	if not id then return end
 	local sound = Instance.new("Sound")
 	sound.Name = "Fuego"
 	sound.SoundId = id
 	sound.Looped = true
-	sound.Volume = 0.45
+	sound.Volume = volume or 0.14
 	sound.PlaybackSpeed = 0.9 + math.random() * 0.2 -- que no suenen todas iguales
 	sound.TimePosition = math.random() * 3
 	sound.RollOffMode = Enum.RollOffMode.InverseTapered
-	sound.RollOffMinDistance = 4
-	sound.RollOffMaxDistance = 28
+	sound.RollOffMinDistance = 3
+	sound.RollOffMaxDistance = 18
+	sound.SoundGroup = getFireGroup()
 	sound.Parent = parent
 	sound:Play()
 end

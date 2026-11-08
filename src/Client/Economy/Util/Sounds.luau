@@ -26,7 +26,7 @@ local EFFECTS: { [string]: Effect } = {
 	Tienda = { start = 3.800, length = 1.000, volume = 0.5 },
 }
 
-local AMBIENT_VOLUME = 0.35
+local AMBIENT_VOLUME = 0.22
 local ambient: Sound? = nil
 
 local function asset(id: number): string?

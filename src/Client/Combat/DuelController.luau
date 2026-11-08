@@ -3,10 +3,11 @@
 	DuelController — Desafíos y HUD de duelos en el cliente.
 	Owner: Dev A (Combat).
 
-	- ProximityPrompt local "Desafiar a duelo" sobre cada otro jugador (oculto si alguno está en duelo).
-	- Invitaciones y avisos breves con notificaciones nativas de Roblox (SetCore).
+	- Los desafíos se mandan desde el menú de la arena del lobby y las invitaciones se responden
+	  en su tarjeta (DuelMenuController). Acá: avisos breves (SetCore) del estado del desafío.
 	- HUD del duelo: cuenta regresiva grande, barras de vida (vos y el rival), reloj,
-	  resultado y botón de revancha (manda un DuelRequest; si los dos lo piden, empieza directo).
+	  resultado (con el oro ganado/perdido si hubo apuesta) y botón de revancha
+	  (manda un DuelRequest con el mismo modo y apuesta; si los dos lo piden, empieza directo).
 	Otras UIs pueden escuchar "DuelInvite" y "DuelStateChanged" por su cuenta.
 ]]
 
@@ -18,9 +19,6 @@ local TweenService = game:GetService("TweenService")
 
 local Remotes = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Remotes"))
 
-local PROMPT_NAME = "DuelPrompt"
-local ACCEPT = "Aceptar"
-local DECLINE = "Rechazar"
 local RESULT_DURATION = 15 -- s que se muestra el resultado / botón de revancha
 local REASONS = {
 	Defeat = "por derrota",
@@ -48,8 +46,9 @@ type Hud = {
 }
 
 local localPlayer = Players.LocalPlayer
-local prompts: { [Player]: ProximityPrompt } = {}
 local hud: Hud? = nil
+local lastMode = "Informal" -- modo y apuesta del último duelo (para la revancha)
+local lastBet = 0
 local opponent: Player? = nil
 local endsAt: number? = nil
 local hudToken = 0
@@ -236,18 +235,21 @@ local function startCountdown(seconds: number, token: number)
 	end)
 end
 
-local function showResult(winner: any, reason: any, foe: Player?, token: number)
+local function showResult(winner: any, reason: any, foe: Player?, token: number, bet: number, prize: number)
 	local h = getHud()
 	h.top.Visible = false
 	endsAt = nil
 
 	local reasonText = if typeof(reason) == "string" then REASONS[reason] else nil
 	if winner == nil then
-		showCenter("EMPATE", DRAW_COLOR, reasonText)
+		local refund = if bet > 0 then " - se devolvió la apuesta" else ""
+		showCenter("EMPATE", DRAW_COLOR, (reasonText or "") .. refund)
 	elseif winner == localPlayer then
-		showCenter("¡GANASTE!", WIN_COLOR, reasonText)
+		local gain = if prize > 0 then `+{prize} de oro` else nil
+		showCenter("¡GANASTE!", WIN_COLOR, if gain and reasonText then `{gain} - {reasonText}` else gain or reasonText)
 	else
-		showCenter("PERDISTE", LOSE_COLOR, reasonText)
+		local loss = if bet > 0 then `-{bet} de oro` else nil
+		showCenter("PERDISTE", LOSE_COLOR, if loss and reasonText then `{loss} - {reasonText}` else loss or reasonText)
 	end
 
 	h.rematch.Visible = foe ~= nil and foe.Parent == Players
@@ -277,7 +279,8 @@ local function onStateChanged(payload: any)
 	elseif state == "Declined" then
 		notify({ Title = "Duelo", Text = `{foeName} rechazó el desafío`, Duration = 3 })
 	elseif state == "Unavailable" then
-		notify({ Title = "Duelo", Text = `{foeName} no está disponible ahora (o vos no lo estás)`, Duration = 3 })
+		local message = if typeof(payload.Message) == "string" then payload.Message else `{foeName} no está disponible ahora (o vos no lo estás)`
+		notify({ Title = "Duelo", Text = message, Duration = 4 })
 		local h = hud
 		if h and h.rematch.Visible then
 			h.rematch.Text = "Revancha"
@@ -287,6 +290,8 @@ local function onStateChanged(payload: any)
 		hudToken += 1
 		opponent = foePlayer
 		endsAt = nil
+		lastMode = if payload.Mode == "Duel" then "Duel" else "Informal"
+		lastBet = if typeof(payload.Bet) == "number" then payload.Bet else 0
 		local h = getHud()
 		hideCenter()
 		h.myName.Text = localPlayer.DisplayName
@@ -307,86 +312,13 @@ local function onStateChanged(payload: any)
 		end)
 	elseif state == "End" then
 		hudToken += 1
-		showResult(payload.Winner, payload.Reason, foePlayer, hudToken)
+		showResult(payload.Winner, payload.Reason, foePlayer, hudToken,
+			if typeof(payload.Bet) == "number" then payload.Bet else 0,
+			if typeof(payload.Prize) == "number" then payload.Prize else 0)
 	end
 end
 
--- ── Desafíos ──
-
-local function isInDuel(player: Player): boolean
-	return player:GetAttribute("InDuel") == true
-end
-
-local function refreshPrompt(player: Player)
-	local prompt = prompts[player]
-	if prompt then
-		prompt.Enabled = not isInDuel(player) and not isInDuel(localPlayer)
-	end
-end
-
-local function attachPrompt(player: Player, character: Model)
-	local root = character:WaitForChild("HumanoidRootPart", 10)
-	if not root or not root:IsA("BasePart") then
-		return
-	end
-
-	local prompt = Instance.new("ProximityPrompt")
-	prompt.Name = PROMPT_NAME
-	prompt.ActionText = "Desafiar a duelo"
-	prompt.ObjectText = player.DisplayName
-	prompt.HoldDuration = 0.5
-	prompt.MaxActivationDistance = 10
-	prompt.RequiresLineOfSight = false
-	prompt.Parent = root
-
-	prompt.Triggered:Connect(function()
-		Remotes.GetEvent("DuelRequest"):FireServer(player)
-	end)
-
-	prompts[player] = prompt
-	refreshPrompt(player)
-end
-
-local function watchPlayer(player: Player)
-	if player == localPlayer then
-		return
-	end
-
-	player.CharacterAdded:Connect(function(character)
-		attachPrompt(player, character)
-	end)
-	if player.Character then
-		task.spawn(attachPrompt, player, player.Character)
-	end
-
-	player:GetAttributeChangedSignal("InDuel"):Connect(function()
-		refreshPrompt(player)
-	end)
-end
-
-local function onInvite(challenger: unknown)
-	if typeof(challenger) ~= "Instance" or not challenger:IsA("Player") then
-		return
-	end
-
-	local callback = Instance.new("BindableFunction")
-	callback.OnInvoke = function(choice: string)
-		Remotes.GetEvent("DuelResponse"):FireServer(challenger, choice == ACCEPT)
-		callback:Destroy()
-	end
-
-	local isRematch = challenger == opponent
-	notify({
-		Title = if isRematch then "¡Piden revancha!" else "¡Desafío de duelo!",
-		Text = if isRematch
-			then `{challenger.DisplayName} quiere la revancha`
-			else `{challenger.DisplayName} te desafía a un duelo 1v1`,
-		Duration = 15,
-		Button1 = ACCEPT,
-		Button2 = DECLINE,
-		Callback = callback,
-	})
-end
+-- ── Revancha ──
 
 local function requestRematch()
 	local h = hud
@@ -403,7 +335,7 @@ local function requestRematch()
 	h.rematch.Active = false
 	h.rematch.AutoButtonColor = false
 	h.rematch.Text = "Esperando..."
-	Remotes.GetEvent("DuelRequest"):FireServer(foe)
+	Remotes.GetEvent("DuelRequest"):FireServer(foe, { Mode = lastMode, Bet = lastBet })
 	task.delay(3, function()
 		if hud == h and h.rematch.Visible and not h.rematch.Active then
 			h.rematch.Text = "Revancha"
@@ -414,29 +346,17 @@ local function requestRematch()
 end
 
 function DuelController:Init()
-	Remotes.GetEvent("DuelInvite").OnClientEvent:Connect(onInvite)
 	Remotes.GetEvent("DuelStateChanged").OnClientEvent:Connect(onStateChanged)
 
 	getHud().rematch.Activated:Connect(requestRematch)
 	RunService.Heartbeat:Connect(updateHud)
 
-	localPlayer:GetAttributeChangedSignal("InDuel"):Connect(function()
-		for player in prompts do
-			refreshPrompt(player)
-		end
-	end)
-
-	Players.PlayerAdded:Connect(watchPlayer)
 	Players.PlayerRemoving:Connect(function(player)
-		prompts[player] = nil
 		local h = hud
 		if player == opponent and h then
 			h.rematch.Visible = false
 		end
 	end)
-	for _, player in Players:GetPlayers() do
-		task.spawn(watchPlayer, player)
-	end
 end
 
 return DuelController

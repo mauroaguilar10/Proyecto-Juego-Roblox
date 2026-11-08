@@ -101,11 +101,13 @@ Model "Weapon" + Grip) y `WeaponPreview` (la ficha de la tienda).
 `{ Kind = "Gold", Amount: number, Position: Vector3 }` al jugador que mató a un guardián;
 `UIController` muestra el «+N» en el mundo y las monedas volando al contador.
 
-**Lobby (B):** `LobbyService` arma la ciudadela alrededor del spawn (`workspace.Lobby`): plaza, muralla,
-torres, estatua, herrería, campamento, arena de duelos decorativa y el puesto de la tienda; su
-`ProximityPrompt` tiene el Attribute `OpenShop = true` y `UIController` abre la tienda al activarlo
-(sin pasar por el servidor). `DungeonService` arma el arco de entrada a la mazmorra (este del spawn) y
-`RecordsService` el cartel de récords (oeste). Las piezas reutilizables están en `Economy/Lobby/Kit`.
+**Lobby (B):** `LobbyService` arma la ciudadela (`workspace.Lobby`). El plano está en
+`Economy/Lobby/Layout`: el spawn al sur (rosa de los vientos junto al portón), la arena de duelos al
+norte, récords al noroeste, mazmorras al noreste, tiendas al oeste y zona de práctica al este, unidos
+por caminos con bordes dorados y jardines. El puesto de la tienda tiene un `ProximityPrompt` con el
+Attribute `OpenShop = true` y `UIController` abre la tienda al activarlo (sin pasar por el servidor).
+`DungeonService` arma el arco de la mazmorra y `RecordsService` el cartel de récords, los dos en las
+posiciones de `Layout`. Las piezas reutilizables están en `Economy/Lobby/Kit`.
 - **Muñecos de práctica** (campo de entrenamiento): Models con `Humanoid` y partes ancladas;
   `CombatService` los golpea como a cualquier enemigo fuera de duelo. Se curan solos y no dan oro.
 - **Iluminación:** `LobbyService` configura `Lighting` al arrancar (atardecer, `Atmosphere`, bloom).
@@ -115,8 +117,8 @@ torres, estatua, herrería, campamento, arena de duelos decorativa y el puesto d
 
 - `EquippedWeapon` siempre existe desde que el jugador entra (por defecto `WeaponData.DEFAULT_WEAPON`).
   Combat debe usar `WeaponData.GetOrDefault()` por si llega un valor inválido.
-- `Gold` solo cambia en el servidor; Combat **nunca** lo modifica. Si en el futuro los duelos
-  dan oro, se amplía este contrato (p. ej. un BindableEvent en `Shared`) vía PR.
+- `Gold` solo cambia en el servidor; Combat **nunca** lo modifica directamente. Las apuestas de
+  duelo pasan por `Economy/DuelWagerService` (Escrow / Payout / Refund), que `ArenaService` llama.
 - `LastAttacker` se escribe **antes** de aplicar el daño letal, así `DungeonService`
   puede leerlo al escuchar `Humanoid.Died`.
 - Mientras `InDuel == true`, Economy debe bloquear compra/equipamiento y entrada a mazmorra.
@@ -131,9 +133,9 @@ torres, estatua, herrería, campamento, arena de duelos decorativa y el puesto d
   (Attribute `WeaponId`) del arma de `EquippedWeapon`; se saca/guarda desde la barra de Roblox.
   Solo se ataca con ella en la mano (`WeaponVisualService.IsWeaponHeld`). No crear otras Tools de arma.
 
-- **Ataque con compromiso.** Cada golpe es `Windup` (`WeaponData.WindupTime`) → `Attacking` (0,1 s,
-  paso hacia adelante) → `Recovery` (`RecoveryTime`; más corta si conecta). Golpear a alguien en
-  `Windup` lo interrumpe, salvo arma `Heavy` en sus últimos 0,15 s (hyperarmor).
+- **Golpe instantáneo.** El clic va directo a `Attacking` (0,1 s, paso hacia adelante) → `Recovery`
+  (`RecoveryTime`; más corta si conecta). El ritmo lo marca `AttackCooldown`. `WindupTime` solo se usa
+  para la animación del cliente (ya no hay estado `Windup` al atacar).
 - **Parry y postura.** Mantener F: los primeros 0,22 s son `Parrying`, después `Blocking`.
   Parry de frente → 0 daño, el atacante suma 35 de `Posture` y queda `Stunned` 1,1 s. Bloquear de frente
   → 0 daño y el defensor suma `PostureDamage`; con `Posture` 100 → `PostureBroken` 2 s (recibe ×1,5).
@@ -152,18 +154,22 @@ torres, estatua, herrería, campamento, arena de duelos decorativa y el puesto d
   Attacker: Player, Target: Model, Damage: number, Killed: boolean, WeaponId: string, Combo: number,
   Interrupted: boolean, Hyperarmor: boolean, Intensity: number }` (`Intensity` 0..1 para hitstop/cámara).
 
-**Remotes de duelo (para la UI de Economy)**
+**Remotes de duelo**
 
-`DuelController` (Combat) muestra notificaciones nativas mínimas. La UI definitiva puede
-escuchar los mismos eventos sin tocar Combat:
+Los desafíos se mandan desde el **menú de la arena del lobby** (`DuelMenuController`): se abre al
+pisar la zona (`workspace` Attributes `DuelZoneCenter` / `DuelZoneRadius`, ver `Shared/DuelRules`).
+`DuelController` (Combat) maneja el HUD del duelo, el resultado y la revancha.
 
-- `DuelInvite` (S→C): `(challenger: Player)`. Responder con
+- `DuelRequest` (C→S): `(target: Player, { Mode: "Informal" | "Duel", Bet: number })`. El servidor exige
+  que el que desafía esté en la arena (salvo revancha al último rival). `Duel`: apuesta entre
+  `DuelRules.MIN_BET` y `MAX_BET`; el ganador cobra `DuelRules.Prize(bet)` = pozo − 10 %.
+- `DuelInvite` (S→C): `(challenger: Player, { Mode, Bet, Prize, Seconds })`. Responder con
   `DuelResponse:FireServer(challenger, accepted: boolean)`.
 - `DuelStateChanged` (S→C): `payload` con
   `State: "InviteSent" | "Declined" | "Unavailable" | "Countdown" | "Fight" | "End"`, `Opponent: Player?`,
-  `Seconds: number?` (Countdown), `EndsAt: number?` (Fight; `workspace:GetServerTimeNow()` del fin por tiempo),
-  `Winner: Player?` (End; `nil` = empate) y
-  `Reason: "Defeat" | "Forfeit" | "Timeout"?` (End).
+  `Seconds: number?` (Countdown / InviteSent), `EndsAt: number?` (Fight; `workspace:GetServerTimeNow()` del fin por tiempo),
+  `Winner: Player?` (End; `nil` = empate), `Reason: "Defeat" | "Forfeit" | "Timeout"?` (End),
+  `Mode`, `Bet`, `Prize` (End: oro cobrado) y `Message: string?` (Unavailable: motivo).
 
 ## 4. Contrato de módulos
 

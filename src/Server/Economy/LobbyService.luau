@@ -1,20 +1,18 @@
 --!strict
 --[[
-	LobbyService — La ciudadela: el lobby completo, armado por código alrededor del spawn.
+	LobbyService — La ciudadela: el lobby completo, armado por código.
 	Owner: Dev B (Economía).
 
-	Distribución (relativa al SpawnLocation; -Z es "norte"):
-	  Centro      Plaza con mosaico y cuatro obeliscos con fuego.
-	  Este  (+X)  Arco de la mazmorra (lo arma DungeonService).
-	  Oeste (-X)  Salón de la fama alrededor del tablero de récords (el tablero lo arma RecordsService).
-	  Norte (-Z)  Armería (derecha; su ProximityPrompt tiene OpenArmorShop = true → ArmorController) y
-	              puesto de la tienda (izquierda): su ProximityPrompt tiene OpenShop = true y UIController
-	              abre la tienda al activarlo (no pasa por el servidor).
-	  Sur   (+Z)  Estatua del campeón y portón de la fortaleza.
-	  Sudoeste    Campo de entrenamiento con muñecos de práctica: se les puede pegar (CombatService
-	              los trata como enemigos), muestran el daño y se curan solos. No dan oro.
-	  Sudeste     Arena de duelos decorativa (los duelos se piden desde el menú).
-	  Noroeste    Herrería.   Noreste: campamento.
+	Distribución (posiciones en Lobby/Layout; -Z es "norte"). El spawn queda al sur, junto al
+	portón, en una rosa de los vientos; desde ahí salen caminos con bordes dorados:
+	  Norte       Arena de duelos: al pisarla se abre el menú de duelo (DuelZoneCenter/Radius).
+	  Noroeste    Salón de la fama alrededor del tablero de récords (el tablero lo arma RecordsService).
+	  Noreste     Arco de la mazmorra (lo arma DungeonService) con cristales del vacío.
+	  Oeste       Mercado con la tienda de armas (OpenShop = true → UIController) y la armería
+	              (OpenArmorShop = true → ArmorController); arco "TIENDAS".
+	  Este        Zona de práctica con muñecos: se les puede pegar (CombatService los trata como
+	              enemigos), muestran el daño y se curan solos. No dan oro.
+	  Entre medio Jardines con árboles, arbustos, rocas y estandartes.
 	  Alrededor   Muralla con almenas, torres, estandartes y antorchas; montañas de terreno a lo lejos.
 
 	También ajusta la iluminación general (atardecer cálido con bruma). Si alguien configura
@@ -22,15 +20,15 @@
 ]]
 local Lighting = game:GetService("Lighting")
 local Kit = require(script.Parent:WaitForChild("Lobby"):WaitForChild("Kit"))
+local Layout = require(script.Parent:WaitForChild("Lobby"):WaitForChild("Layout"))
 local LobbyService = {}
 
 local C = Kit.Colors
 local HALF = 66 -- media distancia entre murallas
 local WALL_HEIGHT = 16
 local WALL_THICK = 3
-local PLAZA_RADIUS = 26
 
-local origin = Vector3.zero -- posición del spawn
+local origin = Vector3.zero -- centro del lobby (Layout.Base)
 local ground = 0 -- altura del piso
 
 local function at(x: number, y: number, z: number): Vector3
@@ -92,55 +90,202 @@ local function mountains()
 	end
 end
 
--- ── Plaza ──
+-- ── Caminos, spawn y jardines ──
+--[[
+	Plano (ver Lobby/Layout): el spawn al sur, junto al portón, en una rosa de los vientos.
+	Del spawn sale el camino principal hacia el norte (arena de duelos) y el camino de abajo
+	hacia el oeste (tiendas) y el este (zona de práctica). Arriba, un camino este-oeste lleva a
+	los récords (noroeste) y a las mazmorras (noreste). Los caminos tienen bordes dorados que
+	brillan; entre ellos hay jardines con árboles, arbustos y rocas.
+]]
+local GLOW = Color3.fromRGB(255, 190, 80)
+local COBBLE = Color3.fromRGB(140, 128, 112)
+local GRASS = Color3.fromRGB(84, 116, 56)
 
-local function ring(parent: Instance, radius: number, y: number, width: number, color: Color3, material: Enum.Material)
+-- Anillo de piezas tangentes alrededor de (cx, cz).
+local function ringAt(parent: Instance, cx: number, cz: number, radius: number, y: number, width: number, color: Color3, material: Enum.Material)
 	local count = math.max(16, math.floor(radius * 3.2))
 	local length = 2 * math.pi * radius / count + 0.1
 	for i = 0, count - 1 do
 		local a = i / count * math.pi * 2
-		local cf = CFrame.new(at(math.cos(a) * radius, y, math.sin(a) * radius)) * CFrame.Angles(0, -a, 0)
+		local cf = CFrame.new(at(cx + math.cos(a) * radius, y, cz + math.sin(a) * radius)) * CFrame.Angles(0, -a, 0)
 		Kit.part(parent, "Anillo", cf, Vector3.new(width, 0.06, length), color, material, false)
 	end
 end
 
-local function plaza(parent: Instance)
-	Kit.part(parent, "Suelo", CFrame.new(at(0, 0.1, 0)), Vector3.new(HALF * 2, 0.2, HALF * 2), Color3.fromRGB(92, 86, 80), Enum.Material.Slate)
-	Kit.cylinder(parent, "BordePlaza", at(0, 0.24, 0), 0.08, (PLAZA_RADIUS + 1.2) * 2, C.DarkStone, Enum.Material.Basalt)
-	Kit.cylinder(parent, "Plaza", at(0, 0.27, 0), 0.08, PLAZA_RADIUS * 2, Color3.fromRGB(128, 118, 104), Enum.Material.Cobblestone)
-	Kit.cylinder(parent, "Centro", at(0, 0.3, 0), 0.08, 20, Color3.fromRGB(198, 188, 168), Enum.Material.Marble)
-	ring(parent, 10.4, 0.34, 0.5, C.Gold, Enum.Material.Foil)
-	ring(parent, PLAZA_RADIUS - 1, 0.32, 0.6, C.Gold, Enum.Material.Foil)
-	for k = 0, 7 do
-		local a = k / 8 * math.pi * 2 + math.pi / 8
-		local mid = (11 + PLAZA_RADIUS - 1.5) / 2
-		local cf = CFrame.new(at(math.cos(a) * mid, 0.33, math.sin(a) * mid)) * CFrame.Angles(0, -a, 0)
-		Kit.part(parent, "Rayo", cf, Vector3.new(PLAZA_RADIUS - 12.5, 0.06, 0.9), Color3.fromRGB(200, 190, 170), Enum.Material.Marble, false)
-	end
-	-- Caminos empedrados desde la plaza hasta la muralla.
-	local length = HALF - PLAZA_RADIUS
-	local mid = PLAZA_RADIUS + length / 2
-	for _, dir in { Vector3.xAxis, -Vector3.xAxis, Vector3.zAxis, -Vector3.zAxis } do
-		local along = dir.X ~= 0
-		local size = if along then Vector3.new(length, 0.08, 8) else Vector3.new(8, 0.08, length)
-		local edge = if along then Vector3.new(length, 0.06, 0.5) else Vector3.new(0.5, 0.06, length)
-		Kit.part(parent, "Camino", CFrame.new(at(dir.X * mid, 0.26, dir.Z * mid)), size, Color3.fromRGB(140, 128, 112), Enum.Material.Cobblestone, false)
-		for _, side in { -4.2, 4.2 } do
-			local offset = if along then Vector3.new(0, 0, side) else Vector3.new(side, 0, 0)
-			Kit.part(parent, "BordeCamino", CFrame.new(at(dir.X * mid, 0.28, dir.Z * mid) + offset), edge, C.DarkStone, Enum.Material.Basalt, false)
-		end
-	end
-	-- Obeliscos con fuego en las diagonales.
-	for _, sx in { -1, 1 } do
-		for _, sz in { -1, 1 } do
-			local p = at(sx * 15.6, 0, sz * 15.6)
-			Kit.part(parent, "Basamento", CFrame.new(p + Vector3.new(0, 0.6, 0)), Vector3.new(3.4, 1.2, 3.4), C.DarkStone, Enum.Material.Slate)
-			Kit.part(parent, "Obelisco", CFrame.new(p + Vector3.new(0, 5.7, 0)), Vector3.new(1.8, 9, 1.8), Color3.fromRGB(70, 66, 64), Enum.Material.Basalt)
-			for _, face in { 0, 90, 180, 270 } do
-				local cf = CFrame.new(p + Vector3.new(0, 6, 0)) * CFrame.Angles(0, math.rad(face), 0) * CFrame.new(0, 0, -0.91)
-				Kit.part(parent, "Runa", cf, Vector3.new(0.25, 5, 0.05), Color3.fromRGB(255, 150, 70), Enum.Material.Neon, false)
+-- Borde de camino recto: cordón oscuro + línea dorada que brilla. `gaps` = tramos [a, b] (sobre el
+-- eje del borde) donde se corta porque llega otro camino.
+local function edge(parent: Instance, along: "X" | "Z", fixed: number, from: number, to: number, inward: number, gaps: { { number } }?)
+	local pieces = { { from, to } }
+	for _, gap in gaps or {} do
+		local nextPieces = {}
+		for _, piece in pieces do
+			if gap[2] <= piece[1] or gap[1] >= piece[2] then
+				table.insert(nextPieces, piece)
+			else
+				if gap[1] > piece[1] then table.insert(nextPieces, { piece[1], gap[1] }) end
+				if gap[2] < piece[2] then table.insert(nextPieces, { gap[2], piece[2] }) end
 			end
-			Kit.brazier(parent, p + Vector3.new(0, 10.2, 0), 0.6)
+		end
+		pieces = nextPieces
+	end
+	for _, piece in pieces do
+		local mid, length = (piece[1] + piece[2]) / 2, piece[2] - piece[1]
+		local function place(name: string, offset: number, y: number, size: Vector2, color: Color3, material: Enum.Material)
+			local pos = if along == "X" then at(mid, y, fixed + offset) else at(fixed + offset, y, mid)
+			local dims = if along == "X" then Vector3.new(length, size.Y, size.X) else Vector3.new(size.X, size.Y, length)
+			Kit.part(parent, name, CFrame.new(pos), dims, color, material, false)
+		end
+		place("Cordon", 0, 0.31, Vector2.new(0.5, 0.12), C.DarkStone, Enum.Material.Basalt)
+		place("Luz", inward * 0.6, 0.31, Vector2.new(0.18, 0.06), GLOW, Enum.Material.Neon)
+	end
+end
+
+-- Camino recto de ancho 8 entre dos puntos alineados a un eje, con bordes.
+local function road(parent: Instance, along: "X" | "Z", fixed: number, from: number, to: number, gapsLow: { { number } }?, gapsHigh: { { number } }?)
+	local mid, length = (from + to) / 2, to - from
+	local pos = if along == "X" then at(mid, 0.26, fixed) else at(fixed, 0.26, mid)
+	local size = if along == "X" then Vector3.new(length, 0.08, 8) else Vector3.new(8, 0.08, length)
+	Kit.part(parent, "Camino", CFrame.new(pos), size, COBBLE, Enum.Material.Cobblestone, false)
+	edge(parent, along, fixed - 4, from, to, 1, gapsLow)
+	edge(parent, along, fixed + 4, from, to, -1, gapsHigh)
+end
+
+local function tree(parent: Instance, x: number, z: number, s: number, leaves: Color3)
+	Kit.cylinder(parent, "Tronco", at(x, 2 * s, z), 4 * s, 0.9 * s, C.DarkWood, Enum.Material.Wood)
+	for i, offset in { Vector3.new(0, 5.2, 0), Vector3.new(1.3, 4.3, 0.6), Vector3.new(-1.1, 4.5, -0.8), Vector3.new(0.2, 6.4, 0.3) } do
+		local size = (if i == 4 then 2.6 else 3.6) * s
+		local leaf = Kit.part(parent, "Copa", CFrame.new(at(x, 0, z) + offset * s), Vector3.new(size, size, size), leaves:Lerp(Color3.new(0, 0, 0), (i % 2) * 0.12), Enum.Material.LeafyGrass, false)
+		leaf.Shape = Enum.PartType.Ball
+	end
+end
+
+local function bush(parent: Instance, x: number, z: number, s: number, color: Color3)
+	local b = Kit.part(parent, "Arbusto", CFrame.new(at(x, 0.6 * s, z)), Vector3.new(2.2 * s, 1.8 * s, 2.2 * s), color, Enum.Material.LeafyGrass, false)
+	b.Shape = Enum.PartType.Ball
+end
+
+local function rock(parent: Instance, x: number, z: number, s: number, turn: number)
+	local stone = Color3.fromRGB(112, 106, 100)
+	Kit.part(parent, "Roca", CFrame.new(at(x, 0.9 * s, z)) * CFrame.Angles(math.rad(12), math.rad(turn), math.rad(-8)), Vector3.new(3.2, 2.2, 2.6) * s, stone, Enum.Material.Slate)
+	Kit.part(parent, "Roca", CFrame.new(at(x + 1.4 * s, 0.6 * s, z + 0.8 * s)) * CFrame.Angles(math.rad(-10), math.rad(turn + 40), math.rad(14)), Vector3.new(2, 1.5, 1.8) * s, stone:Lerp(Color3.new(0, 0, 0), 0.15), Enum.Material.Slate)
+end
+
+-- Poste con estandarte.
+local function bannerPole(parent: Instance, x: number, z: number, color: Color3)
+	local base = at(x, 0, z)
+	Kit.cylinder(parent, "Mastil", base + Vector3.new(0, 4.5, 0), 9, 0.35, C.DarkWood, Enum.Material.Wood)
+	Kit.part(parent, "Punta", CFrame.new(base + Vector3.new(0, 9.2, 0)), Vector3.new(0.5, 0.5, 0.5), C.Gold, Enum.Material.Metal, false)
+	local toCenter = Vector3.new(-x, 0, Layout.SPAWN.Y - z)
+	local look = if toCenter.Magnitude > 0.1 then toCenter.Unit else Vector3.zAxis
+	Kit.banner(parent, CFrame.lookAt(base + Vector3.new(0, 8.4, 0), base + Vector3.new(0, 8.4, 0) + look) * CFrame.new(0, 0, -0.3), 2, 4.2, color)
+end
+
+-- Arco con cartel sobre un camino (zona). `cf` a ras del piso, mirando hacia donde se lee.
+local function zoneArch(parent: Instance, cf: CFrame, title: string, subtitle: string?)
+	for _, s in { -1, 1 } do
+		Kit.part(parent, "Poste", cf * CFrame.new(s * 4.6, 3.6, 0), Vector3.new(0.8, 7.2, 0.8), C.DarkWood, Enum.Material.Wood)
+		Kit.part(parent, "Punta", cf * CFrame.new(s * 4.6, 7.5, 0) * CFrame.Angles(math.rad(45), 0, math.rad(45)), Vector3.new(0.6, 0.6, 0.6), C.Gold, Enum.Material.Metal, false)
+	end
+	Kit.part(parent, "Marco", cf * CFrame.new(0, 6.4, 0.02), Vector3.new(8.8, 2.2, 0.3), C.Gold, Enum.Material.Foil, false)
+	local board = Kit.sign(parent, cf * CFrame.new(0, 6.4, 0), Vector3.new(8.4, 1.8, 0.4), title, true)
+	local light = Instance.new("PointLight")
+	light.Color, light.Range, light.Brightness = Color3.fromRGB(255, 200, 130), 10, 0.8
+	light.Parent = board
+	if subtitle then
+		Kit.sign(parent, cf * CFrame.new(0, 4.9, 0), Vector3.new(6, 0.8, 0.3), subtitle, true)
+	end
+end
+
+local function grounds(parent: Instance)
+	Kit.part(parent, "Suelo", CFrame.new(at(0, 0.1, 0)), Vector3.new(HALF * 2, 0.2, HALF * 2), Color3.fromRGB(92, 86, 80), Enum.Material.Slate)
+
+	local sx, sz = Layout.SPAWN.X, Layout.SPAWN.Y
+	local upper, lower, side = Layout.UPPER_ROAD_Z, Layout.LOWER_ROAD_Z, Layout.SIDE_ROAD_X
+	local arenaEdge = Layout.ARENA.Y + 17 -- borde sur de la plataforma de la arena
+
+	-- Jardines (debajo de los caminos).
+	for _, g in {
+		{ -38, -5, upper + 5, lower - 5 }, { 5, 32, upper + 5, lower - 5 }, -- entre los dos caminos
+		{ -37, -5, arenaEdge + 1, upper - 5 }, { 5, 37, arenaEdge + 1, upper - 5 }, -- junto a la arena
+		{ -38, -11, lower + 5, HALF - 3 }, { 11, 32, lower + 5, HALF - 3 }, -- junto al portón
+		{ -HALF + 2, -47, -HALF + 2, upper - 5 }, { 47, HALF - 2, -HALF + 2, upper - 5 }, -- detrás de récords / mazmorras
+		{ -36, -23, -HALF + 2, arenaEdge }, { 23, 36, -HALF + 2, arenaEdge },
+	} do
+		local x0, x1, z0, z1 = g[1], g[2], g[3], g[4]
+		Kit.part(parent, "Pasto", CFrame.new(at((x0 + x1) / 2, 0.22, (z0 + z1) / 2)), Vector3.new(x1 - x0, 0.1, z1 - z0), GRASS, Enum.Material.Grass, false)
+	end
+
+	-- Spawn: rosa de los vientos con anillos dorados.
+	Kit.cylinder(parent, "BordeSpawn", at(sx, 0.26, sz), 0.1, 21.2, C.DarkStone, Enum.Material.Basalt)
+	Kit.cylinder(parent, "PlazaSpawn", at(sx, 0.29, sz), 0.1, 20, COBBLE, Enum.Material.Cobblestone)
+	Kit.cylinder(parent, "CentroSpawn", at(sx, 0.32, sz), 0.1, 9, Color3.fromRGB(198, 188, 168), Enum.Material.Marble)
+	ringAt(parent, sx, sz, 9.4, 0.36, 0.3, GLOW, Enum.Material.Neon)
+	ringAt(parent, sx, sz, 4.7, 0.39, 0.25, C.Gold, Enum.Material.Foil)
+	for k = 0, 7 do
+		local a = k / 8 * math.pi * 2
+		local length = if k % 2 == 0 then 8.6 else 5.4
+		local cf = CFrame.new(at(sx + math.cos(a) * length / 2, 0.38, sz + math.sin(a) * length / 2)) * CFrame.Angles(0, -a, 0)
+		Kit.part(parent, "Rosa", cf * CFrame.Angles(0, 0, 0), Vector3.new(length, 0.05, if k % 2 == 0 then 1.1 else 0.8), Color3.fromRGB(92, 84, 78), Enum.Material.Slate, false)
+	end
+
+	-- Caminos.
+	road(parent, "Z", sx, arenaEdge, upper - 4) -- spawn → arena (tramo norte)
+	road(parent, "Z", sx, upper + 4, sz - 10) -- spawn → arena (tramo sur)
+	road(parent, "Z", sx, sz + 10, HALF - 1.5) -- spawn → portón
+	road(parent, "X", upper, -side - 4, side + 4, { { -side - 4, -side + 4 }, { -4, 4 }, { side - 4, side + 4 } }, { { -4, 4 } })
+	for _, s in { -1, 1 } do
+		road(parent, "Z", s * side, Layout.RECORDS.z + 3, upper - 4) -- subidas a récords / mazmorras
+	end
+	road(parent, "X", lower, -38, sx - 9.2) -- spawn → tiendas
+	road(parent, "X", lower, sx + 9.2, Layout.TRAINING.X - 11) -- spawn → zona de práctica
+	-- Plaza del mercado (tiendas).
+	Kit.part(parent, "Mercado", CFrame.new(at(-48, 0.25, 43.5)), Vector3.new(20, 0.08, 43), Color3.fromRGB(150, 136, 118), Enum.Material.Cobblestone, false)
+
+	-- Arcos con cartel.
+	zoneArch(parent, CFrame.lookAt(at(sx, 0, sz + 13), at(sx, 0, sz + 30)), "SPAWN")
+	zoneArch(parent, CFrame.lookAt(at(-38.5, 0, lower), at(0, 0, lower)) * CFrame.Angles(0, 0, 0), "TIENDAS", "Armaduras · Armas")
+
+	-- Braseros junto al spawn y estandartes a lo largo de los caminos.
+	for _, s in { -1, 1 } do
+		Kit.brazier(parent, at(s * 11.5, 0, sz + 9), 0.9)
+		bannerPole(parent, s * 12.5, sz - 9, Color3.fromRGB(110, 50, 160))
+		bannerPole(parent, s * 6.5, upper + 7, C.Crimson)
+	end
+	bannerPole(parent, -34, lower - 6, C.Crimson)
+	bannerPole(parent, 31, lower - 6, C.Crimson)
+
+	-- Árboles, arbustos y rocas en los jardines.
+	local GREEN, DARK_GREEN, AUTUMN = Color3.fromRGB(78, 128, 52), Color3.fromRGB(56, 100, 44), Color3.fromRGB(176, 52, 44)
+	for _, t in {
+		{ -30, 16, 1, GREEN }, { -16, 30, 0.8, AUTUMN }, { 28, 16, 1, DARK_GREEN }, { 16, 30, 0.85, GREEN },
+		{ -26, -8, 0.9, GREEN }, { -12, -14, 0.7, AUTUMN }, { 26, -10, 0.9, DARK_GREEN }, { 14, -15, 0.75, GREEN },
+		{ -30, 58, 0.9, AUTUMN }, { 26, 58, 0.9, GREEN },
+		{ -60, -12, 1.2, DARK_GREEN }, { -58, -56, 1.1, GREEN }, { 60, -12, 1.2, GREEN }, { 58, -56, 1.1, DARK_GREEN },
+		{ -30, -50, 1, GREEN }, { 30, -52, 1, DARK_GREEN },
+	} do
+		tree(parent, t[1] :: number, t[2] :: number, t[3] :: number, t[4] :: Color3)
+	end
+	for _, b in {
+		{ -22, 22, 1 }, { -10, 14, 0.8 }, { 22, 24, 1 }, { 10, 14, 0.8 }, { -32, -6, 0.9 }, { 32, -6, 0.9 },
+		{ -18, 54, 0.9 }, { 18, 54, 0.9 }, { -8, -4, 0.7 }, { 8, -4, 0.7 },
+	} do
+		bush(parent, b[1], b[2], b[3], if b[1] < 0 then GREEN else DARK_GREEN)
+	end
+	for i, r in {
+		{ -56, -30, 1.4 }, { -54, -44, 1.2 }, { -30, -36, 1 }, { 56, -30, 1.4 }, { 54, -44, 1.2 }, { 30, -38, 1 },
+		{ -24, 34, 0.7 }, { 24, 36, 0.7 }, { -36, -22, 0.9 }, { 36, -22, 0.9 },
+	} do
+		rock(parent, r[1], r[2], r[3], i * 37)
+	end
+	-- Cristales del vacío junto al portal de las mazmorras.
+	for i, c in { { 34, -40, 2.6 }, { 36, -28, 1.8 }, { 50, -40, 2.2 }, { 49, -27, 1.6 }, { 56, -36, 2.8 } } do
+		local crystal = Kit.part(parent, "Cristal", CFrame.new(at(c[1], c[3] / 2, c[2])) * CFrame.Angles(math.rad(i * 9 - 20), math.rad(i * 50), math.rad(14 - i * 5)),
+			Vector3.new(0.7, c[3], 0.7), Color3.fromRGB(190, 90, 255), Enum.Material.Neon, false)
+		if i % 2 == 1 then
+			local light = Instance.new("PointLight")
+			light.Color, light.Range, light.Brightness = Color3.fromRGB(190, 90, 255), 10, 1.2
+			light.Parent = crystal
 		end
 	end
 end
@@ -299,9 +444,9 @@ local function shopStall(parent: Instance, cf: CFrame, armory: boolean)
 	prompt.Parent = counter
 end
 
--- Pórtico del salón de la fama alrededor del tablero de récords (RecordsService lo pone en x = -14).
+-- Pórtico del salón de la fama alrededor del tablero de récords (los dos usan Layout.RECORDS).
 local function hallOfFame(parent: Instance)
-	local cf = facing(-14, 0, 0, 0)
+	local cf = Layout.Facing(Layout.RECORDS)
 	Kit.part(parent, "Tarima", cf * CFrame.new(0, 0.3, 0.6), Vector3.new(17, 0.6, 5), Color3.fromRGB(196, 186, 166), Enum.Material.Marble)
 	for _, x in { -7, 7 } do
 		Kit.part(parent, "Basa", cf * CFrame.new(x, 1, 0.6), Vector3.new(2.4, 0.8, 2.4), Color3.fromRGB(196, 186, 166), Enum.Material.Marble)
@@ -313,72 +458,6 @@ local function hallOfFame(parent: Instance)
 	Kit.sign(parent, cf * CFrame.new(0, 13, -0.75), Vector3.new(12, 1.2, 0.12), "SALÓN DE LA FAMA")
 	for _, x in { -9.8, 9.8 } do
 		Kit.brazier(parent, (cf * CFrame.new(x, 0, -1)).Position, 0.8)
-	end
-end
-
--- Poste indicador con flechas hacia cada lugar.
-local function signpost(parent: Instance, x: number, z: number)
-	local base = at(x, 0, z)
-	Kit.cylinder(parent, "Poste", base + Vector3.new(0, 4, 0), 8, 0.6, C.DarkWood, Enum.Material.Wood)
-	local targets = {
-		{ "MAZMORRA", 14, 0 }, { "TIENDA", -8.5, -21 }, { "ARMERÍA", 8.5, -21 }, { "RÉCORDS", -14, 0 },
-		{ "ENTRENAMIENTO", -34, 30 }, { "DUELOS", 34, 30 },
-	}
-	for i, t in targets do
-		local target = at(t[2] :: number, 0, t[3] :: number)
-		local dir = Vector3.new(target.X - base.X, 0, target.Z - base.Z).Unit
-		local y = 7.4 - (i - 1) * 1.1
-		local cf = CFrame.lookAt(base + Vector3.new(0, y, 0), base + Vector3.new(0, y, 0) + dir) * CFrame.Angles(0, math.rad(90), 0)
-		local text = t[1] :: string
-		local length = 1.2 + #text * 0.32
-		Kit.sign(parent, cf * CFrame.new(length / 2 + 0.3, 0, 0), Vector3.new(length, 0.85, 0.15), text, true)
-	end
-end
-
--- ── Estatua del campeón ──
-
-local function statue(parent: Instance)
-	local cf = facing(0, 46, 0, 0)
-	local marble = Color3.fromRGB(206, 200, 188)
-	local k = 2.6
-	Kit.part(parent, "Pedestal", cf * CFrame.new(0, 0.5, 0), Vector3.new(15, 1, 15), C.DarkStone, Enum.Material.Slate)
-	Kit.part(parent, "Pedestal", cf * CFrame.new(0, 3, 0), Vector3.new(11, 4, 11), Color3.fromRGB(86, 80, 76), Enum.Material.Basalt)
-	Kit.part(parent, "Pedestal", cf * CFrame.new(0, 5.4, 0), Vector3.new(12, 0.8, 12), C.DarkStone, Enum.Material.Slate)
-	Kit.sign(parent, cf * CFrame.new(0, 3, -5.62), Vector3.new(8, 1.6, 0.2), "EL PRIMER CAMPEÓN")
-	local y0 = 5.8
-	local function block(name: string, local_: CFrame, size: Vector3, color: Color3?, material: Enum.Material?)
-		Kit.part(parent, name, cf * local_, size * k, color or marble, material or Enum.Material.Marble)
-	end
-	-- Piernas en guardia (la izquierda adelantada).
-	block("Pierna", CFrame.new(-0.55 * k, y0 + 1 * k, -0.35 * k), Vector3.new(0.95, 2, 1))
-	block("Pierna", CFrame.new(0.55 * k, y0 + 1 * k, 0.25 * k), Vector3.new(0.95, 2, 1))
-	block("Torso", CFrame.new(0, y0 + 3 * k, 0), Vector3.new(2.1, 2, 1.1))
-	block("Cinturon", CFrame.new(0, y0 + 2.15 * k, 0), Vector3.new(2.2, 0.3, 1.2), C.Gold, Enum.Material.Foil)
-	block("Hombrera", CFrame.new(-1.15 * k, y0 + 3.9 * k, 0), Vector3.new(1.2, 0.5, 1.3))
-	block("Hombrera", CFrame.new(1.15 * k, y0 + 3.9 * k, 0), Vector3.new(1.2, 0.5, 1.3))
-	block("Cabeza", CFrame.new(0, y0 + 4.6 * k, 0), Vector3.new(1.1, 1.1, 1.1))
-	block("Casco", CFrame.new(0, y0 + 4.85 * k, 0), Vector3.new(1.3, 0.8, 1.3))
-	block("Penacho", CFrame.new(0, y0 + 5.45 * k, 0.1 * k), Vector3.new(0.2, 0.8, 1.3), C.Gold, Enum.Material.Foil)
-	block("Capa", CFrame.new(0, y0 + 2.3 * k, 0.62 * k) * CFrame.Angles(math.rad(8), 0, 0), Vector3.new(2.2, 3.2, 0.15))
-	-- Brazo derecho en alto con la espada.
-	block("Brazo", CFrame.new(1.55 * k, y0 + 4.8 * k, 0), Vector3.new(0.9, 2, 0.9))
-	Kit.sword(parent, cf * CFrame.new(1.55 * k, y0 + 5.7 * k, 0), 3.6 * k, C.Gold)
-	-- Brazo izquierdo al frente con el escudo.
-	local arm = CFrame.new(-1.55 * k, y0 + 3.8 * k, 0) * CFrame.Angles(math.rad(70), 0, 0) * CFrame.new(0, -1 * k, 0)
-	block("Brazo", arm, Vector3.new(0.9, 2, 0.9))
-	local hand = cf * arm * CFrame.new(0, -1 * k, 0)
-	local shield = Kit.part(parent, "Escudo", CFrame.new(hand.Position + cf.LookVector * 0.5 * k) * cf.Rotation * CFrame.Angles(0, math.rad(90), 0),
-		Vector3.new(0.3, 2.6, 2.6) * k, marble, Enum.Material.Marble)
-	shield.Shape = Enum.PartType.Cylinder
-	Kit.part(parent, "Umbo", CFrame.new(hand.Position + cf.LookVector * 0.95 * k) * cf.Rotation, Vector3.new(0.6, 0.6, 0.3) * k, C.Gold, Enum.Material.Foil, false)
-	-- Reflectores al pie que la iluminan desde abajo.
-	for _, x in { -5, 5 } do
-		local from = (cf * CFrame.new(x, 1.2, -7.5)).Position
-		local lamp = Kit.part(parent, "Reflector", CFrame.lookAt(from, (cf * CFrame.new(0, y0 + 3 * k, 0)).Position), Vector3.new(0.8, 0.8, 0.8), C.Iron, Enum.Material.Metal)
-		local spot = Instance.new("SpotLight")
-		spot.Face = Enum.NormalId.Front
-		spot.Color, spot.Range, spot.Angle, spot.Brightness = Color3.fromRGB(255, 214, 160), 32, 50, 3
-		spot.Parent = lamp
 	end
 end
 
@@ -479,21 +558,21 @@ local function fence(parent: Instance, from: Vector3, to: Vector3)
 	end
 end
 
-local function trainingGround(parent: Instance)
-	local cx, cz = -34, 30
+-- `dir` = lado de la entrada: +1 este, -1 oeste (mirando hacia el spawn).
+local function trainingGround(parent: Instance, cx: number, cz: number, dir: number)
 	Kit.part(parent, "Tierra", CFrame.new(at(cx, 0.24, cz)), Vector3.new(22, 0.08, 18), Color3.fromRGB(120, 96, 70), Enum.Material.Ground, false)
-	local x0, x1, z0, z1 = cx - 11, cx + 11, cz - 9, cz + 9
-	fence(parent, at(x0, 0, z0), at(x1, 0, z0))
-	fence(parent, at(x0, 0, z1), at(x1, 0, z1))
-	fence(parent, at(x0, 0, z0), at(x0, 0, z1))
-	-- Lado que da a la plaza (este) con entrada en el medio.
-	fence(parent, at(x1, 0, z0), at(x1, 0, cz - 3))
-	fence(parent, at(x1, 0, cz + 3), at(x1, 0, z1))
+	local front, back, z0, z1 = cx + dir * 11, cx - dir * 11, cz - 9, cz + 9
+	fence(parent, at(back, 0, z0), at(front, 0, z0))
+	fence(parent, at(back, 0, z1), at(front, 0, z1))
+	fence(parent, at(back, 0, z0), at(back, 0, z1))
+	-- Lado que da al camino, con entrada en el medio.
+	fence(parent, at(front, 0, z0), at(front, 0, cz - 3))
+	fence(parent, at(front, 0, cz + 3), at(front, 0, z1))
 	for _, dz in { -5, 0, 5 } do
-		dummy(parent, facing(cx - 4, cz + dz, cx + 20, cz + dz))
+		dummy(parent, facing(cx - 4 * dir, cz + dz, cx + 20 * dir, cz + dz))
 	end
 	-- Estante de armas contra la valla del fondo.
-	local rack = facing(cx - 9.5, cz, cx, cz)
+	local rack = facing(cx - 9.5 * dir, cz, cx, cz)
 	for _, x in { -2.5, 2.5 } do
 		Kit.part(parent, "Estante", rack * CFrame.new(x, 1.75, 0), Vector3.new(0.4, 3.5, 0.4), C.DarkWood, Enum.Material.Wood)
 	end
@@ -501,129 +580,275 @@ local function trainingGround(parent: Instance)
 	for i = -2, 2 do
 		Kit.sword(parent, rack * CFrame.new(i * 1, 0.2, -0.3) * CFrame.Angles(math.rad(-10), 0, 0), 3.4, Color3.fromRGB(190, 194, 200))
 	end
-	Kit.sign(parent, facing(x1 + 0.6, cz - 4, 0, 0) * CFrame.new(0, 4.2, 0), Vector3.new(7, 1.4, 0.25), "CAMPO DE ENTRENAMIENTO")
-	Kit.part(parent, "Poste", facing(x1 + 0.6, cz - 4, 0, 0) * CFrame.new(0, 1.8, 0.3), Vector3.new(0.4, 3.6, 0.4), C.DarkWood, Enum.Material.Wood)
+	local signCf = facing(front + 0.6 * dir, cz - 4, Layout.SPAWN.X, Layout.SPAWN.Y)
+	Kit.sign(parent, signCf * CFrame.new(0, 4.2, 0), Vector3.new(7, 1.4, 0.25), "ZONA DE PRÁCTICA")
+	Kit.part(parent, "Poste", signCf * CFrame.new(0, 1.8, 0.3), Vector3.new(0.4, 3.6, 0.4), C.DarkWood, Enum.Material.Wood)
 end
 
--- ── Arena de duelos (decorativa) ──
-
+-- ── Arena de duelos (zona del menú de duelo) ──
+--[[
+	Coliseo chico: plataforma de piedra en dos gradas, arena con espadas cruzadas y laureles,
+	anillo dorado que brilla y runas en el borde, cerco de pilares de piedra (puntas y gemas
+	doradas) con barandas de madera y estandartes, entrada hacia la plaza con cartel y brasero,
+	y detrás una muralla curva con torre-portal, escaleras, nichos con armas, estandartes,
+	enredaderas, antorchas y cuencos de fuego.
+]]
 local function duelPit(parent: Instance)
-	local cx, cz, radius = 34, 30, 12
-	Kit.cylinder(parent, "Arena", at(cx, 0.3, cz), 0.12, radius * 2, Color3.fromRGB(200, 174, 124), Enum.Material.Sand)
-	ring(parent, radius, 0.36, 0.8, C.DarkStone, Enum.Material.Slate)
-	-- Cerco de postes con cuerda; abierto hacia la plaza.
-	local count = 18
+	local cx, cz, R = Layout.ARENA.X, Layout.ARENA.Y, 12
 	local center = at(cx, 0, cz)
-	local openAngle = math.atan2(origin.Z - center.Z, origin.X - center.X)
-	local function postAt(i: number): Vector3
-		local a = openAngle + (i + 1) / count * math.pi * 2
-		return center + Vector3.new(math.cos(a) * (radius + 0.8), 0, math.sin(a) * (radius + 0.8))
+	-- Zona del menú de duelo (DuelRules.InZone): al pisar la arena se abre el menú.
+	workspace:SetAttribute("DuelZoneCenter", center)
+	workspace:SetAttribute("DuelZoneRadius", R)
+
+	local STONE = Color3.fromRGB(124, 114, 102)
+	local STONE_DARK = Color3.fromRGB(86, 80, 74)
+	local WALL = Color3.fromRGB(110, 100, 92)
+	local SAND = Color3.fromRGB(216, 182, 128)
+	local SAND_DARK = Color3.fromRGB(178, 142, 94)
+	local GLOW = Color3.fromRGB(255, 190, 80)
+	local VINE = Color3.fromRGB(70, 112, 48)
+	local LEAF = Color3.fromRGB(96, 146, 60)
+	local SLATE, COBBLE, FOIL, NEON = Enum.Material.Slate, Enum.Material.Cobblestone, Enum.Material.Foil, Enum.Material.Neon
+	local V = Vector3.new
+
+	local openAngle = math.atan2(origin.Z - center.Z, origin.X - center.X) -- hacia la plaza
+	local back = openAngle + math.pi
+
+	local function polar(r: number, a: number, y: number): Vector3
+		return center + V(math.cos(a) * r, y, math.sin(a) * r)
 	end
-	for i = 0, count - 3 do
-		local p = postAt(i)
-		Kit.part(parent, "Poste", CFrame.new(p + Vector3.new(0, 1.6, 0)), Vector3.new(0.5, 3.2, 0.5), C.DarkWood, Enum.Material.Wood)
-		if i < count - 3 then
-			local q = postAt(i + 1)
-			local mid = (p + q) / 2 + Vector3.new(0, 2.4, 0)
-			Kit.part(parent, "Cuerda", CFrame.lookAt(mid, q + Vector3.new(0, 2.4, 0)), Vector3.new(0.15, 0.15, (q - p).Magnitude), Color3.fromRGB(206, 186, 140), Enum.Material.Fabric, false)
+	-- CFrame en (r, a) mirando hacia el centro de la arena (-Z = hacia adentro).
+	local function inward(r: number, a: number, y: number): CFrame
+		local p = polar(r, a, y)
+		return CFrame.lookAt(p, V(center.X, p.Y, center.Z))
+	end
+	-- Anillo (o arco) de piezas tangentes.
+	local function arc(radius: number, y: number, width: number, height: number, color: Color3, material: Enum.Material, from: number, to: number)
+		local span = to - from
+		local count = math.max(8, math.ceil(math.abs(span) * radius / 1.5))
+		local seg = math.abs(span) * radius / count + 0.1
+		for i = 0, count - 1 do
+			local a = from + (i + 0.5) / count * span
+			local p = polar(radius, a, y)
+			Kit.part(parent, "Anillo", CFrame.lookAt(p, p + V(-math.sin(a), 0, math.cos(a))), V(width, height, seg), color, material, false)
 		end
 	end
-	-- Braseros a los dos lados de la entrada (afuera del cerco).
+	local function glowAt(part: BasePart, range: number, brightness: number)
+		local l = Instance.new("PointLight")
+		l.Color, l.Range, l.Brightness, l.Shadows = GLOW, range, brightness, false
+		l.Parent = part
+	end
+	-- Pedestal de piedra con bandas doradas, runa de rayo y cuenco de fuego.
+	local function pedestal(base: Vector3, faceTo: Vector3)
+		local cf = CFrame.lookAt(base, V(faceTo.X, base.Y, faceTo.Z))
+		Kit.part(parent, "Pedestal", cf * CFrame.new(0, 1.5, 0), V(2.4, 3, 2.4), STONE, COBBLE)
+		Kit.part(parent, "Zocalo", cf * CFrame.new(0, 0.2, 0), V(2.9, 0.4, 2.9), STONE_DARK, SLATE)
+		Kit.part(parent, "Losa", cf * CFrame.new(0, 3.2, 0), V(2.9, 0.4, 2.9), STONE_DARK, SLATE)
+		for _, y in { 0.55, 2.85 } do
+			Kit.part(parent, "Banda", cf * CFrame.new(0, y, 0), V(2.5, 0.2, 2.5), C.Gold, FOIL, false)
+		end
+		for _, b in { { 0.12, 1.85, 25 }, { -0.12, 1.3, 25 } } do
+			Kit.part(parent, "Rayo", cf * CFrame.new(b[1], b[2], -1.23) * CFrame.Angles(0, 0, math.rad(b[3])), V(0.22, 0.75, 0.05), GLOW, NEON, false)
+		end
+		Kit.part(parent, "Rayo", cf * CFrame.new(0, 1.58, -1.23) * CFrame.Angles(0, 0, math.rad(-60)), V(0.18, 0.5, 0.05), GLOW, NEON, false)
+		Kit.fireBowl(parent, base + V(0, 3.4, 0), 1)
+	end
+
+	-- ── Plataforma, arena y runas ──
+	Kit.cylinder(parent, "Grada", polar(0, 0, 0.25), 0.5, (R + 5) * 2, STONE_DARK, SLATE)
+	Kit.cylinder(parent, "Grada", polar(0, 0, 0.5), 1, (R + 3) * 2, STONE, COBBLE)
+	Kit.cylinder(parent, "BordeRunas", polar(0, 0, 0.55), 1.1, (R + 1.6) * 2, Color3.fromRGB(100, 92, 84), SLATE)
+	Kit.cylinder(parent, "Arena", polar(0, 0, 0.57), 1.14, R * 2, SAND, Enum.Material.Sand)
+	arc(R + 4.95, 0.52, 0.3, 0.05, C.Gold, FOIL, 0, math.pi * 2)
+	arc(R + 2.95, 1.02, 0.3, 0.05, C.Gold, FOIL, 0, math.pi * 2)
+	arc(R + 0.12, 1.15, 0.3, 0.04, GLOW, NEON, 0, math.pi * 2)
+	arc(R + 1.48, 1.12, 0.12, 0.03, GLOW, NEON, 0, math.pi * 2)
+	for i = 0, 15 do
+		local a = (i + 0.5) / 16 * math.pi * 2
+		local p = polar(R + 0.8, a, 1.12)
+		local cf = CFrame.lookAt(p, p + V(-math.sin(a), 0, math.cos(a)))
+		Kit.part(parent, "Runa", cf * CFrame.Angles(0, math.rad(45), 0), V(0.5, 0.04, 0.5), GLOW, NEON, false)
+		Kit.part(parent, "Runa", cf * CFrame.Angles(0, math.rad(45), 0), V(0.26, 0.05, 0.26), STONE_DARK, SLATE, false)
+		for _, s in { -1, 1 } do
+			Kit.part(parent, "Runa", cf * CFrame.new(0, 0, s * 0.5), V(0.08, 0.04, 0.3), GLOW, NEON, false)
+		end
+	end
+	-- Espadas cruzadas y laureles dibujados en la arena (mirando a la entrada).
+	local emblem = CFrame.lookAt(polar(0, 0, 1.16), polar(1, openAngle, 1.16))
+	for _, ang in { 32, -32 } do
+		local blade = emblem * CFrame.Angles(0, math.rad(ang), 0)
+		Kit.part(parent, "Dibujo", blade * CFrame.new(0, 0, -0.6), V(0.6, 0.04, 8.4), SAND_DARK, Enum.Material.Sand, false)
+		Kit.part(parent, "Dibujo", blade * CFrame.new(0, 0, 3.5), V(2.4, 0.04, 0.4), SAND_DARK, Enum.Material.Sand, false)
+		Kit.part(parent, "Dibujo", blade * CFrame.new(0, 0, 4.3), V(0.32, 0.04, 1.2), SAND_DARK, Enum.Material.Sand, false)
+	end
 	for _, side in { -1, 1 } do
-		local a = openAngle + side * 1.6 / count * math.pi * 2
-		Kit.brazier(parent, center + Vector3.new(math.cos(a) * (radius + 2.6), 0, math.sin(a) * (radius + 2.6)), 0.9)
+		for j = 0, 6 do
+			local a = math.pi / 2 + side * (0.55 + j * 0.3)
+			local leaf = emblem * CFrame.new(math.cos(a) * 4.6, 0, math.sin(a) * 4.6) * CFrame.Angles(0, -a + side * 0.6, 0)
+			Kit.part(parent, "Laurel", leaf, V(0.4, 0.04, 1), SAND_DARK, Enum.Material.Sand, false)
+		end
 	end
-	-- Armas clavadas en la arena.
-	Kit.sword(parent, CFrame.new(at(cx - 3, 0, cz + 2)) * CFrame.Angles(math.rad(14), 0, math.rad(-10)), 4.5, Color3.fromRGB(190, 194, 200))
-	Kit.sword(parent, CFrame.new(at(cx + 2, 0, cz - 3)) * CFrame.Angles(math.rad(-12), 0, math.rad(16)), 4.5, Color3.fromRGB(190, 194, 200))
-	local signCf = facing(cx - 15, cz - 9, 0, 0)
-	Kit.part(parent, "Poste", signCf * CFrame.new(0, 2, 0.3), Vector3.new(0.4, 4, 0.4), C.DarkWood, Enum.Material.Wood)
-	Kit.sign(parent, signCf * CFrame.new(0, 4.6, 0), Vector3.new(6, 1.4, 0.25), "ARENA DE DUELOS")
-	Kit.sign(parent, signCf * CFrame.new(0, 3.5, 0), Vector3.new(6, 0.7, 0.2), "Desafiá a otro jugador desde el menú")
-	Kit.banner(parent, signCf * CFrame.new(-3.6, 5.6, 0.3), 2, 3.5, C.Crimson)
-end
 
--- ── Herrería y campamento ──
-
-local function forge(parent: Instance)
-	local cf = facing(-38, -36, 0, 0)
-	Kit.part(parent, "Fragua", cf * CFrame.new(0, 2.5, 0), Vector3.new(8, 5, 6), C.DarkStone, Enum.Material.Cobblestone)
-	local mouth = Kit.part(parent, "Boca", cf * CFrame.new(0, 2.2, -2.95), Vector3.new(4, 2.4, 0.2), Color3.fromRGB(255, 120, 40), Enum.Material.Neon, false)
-	local f = Instance.new("Fire")
-	f.Size, f.Heat = 4, 4
-	f.Color, f.SecondaryColor = Color3.fromRGB(255, 140, 50), Color3.fromRGB(255, 220, 120)
-	f.Parent = mouth
-	local glow = Instance.new("PointLight")
-	glow.Color, glow.Range, glow.Brightness = Color3.fromRGB(255, 140, 60), 20, 2.5
-	glow.Parent = mouth
-	Kit.embers(mouth, 10)
-	local chimney = Kit.part(parent, "Chimenea", cf * CFrame.new(0, 9, 1.5), Vector3.new(2.6, 8, 2.6), Color3.fromRGB(70, 66, 62), Enum.Material.Cobblestone)
-	local smoke = Instance.new("Smoke")
-	smoke.Color, smoke.Opacity, smoke.RiseVelocity, smoke.Size = Color3.fromRGB(90, 86, 84), 0.15, 4, 2
-	smoke.Parent = chimney
-	-- Yunque con martillo.
-	local anvil = cf * CFrame.new(0, 0, -6.5)
-	Kit.part(parent, "Tronco", anvil * CFrame.new(0, 0.9, 0), Vector3.new(1.8, 1.8, 1.8), C.DarkWood, Enum.Material.Wood)
-	Kit.part(parent, "Yunque", anvil * CFrame.new(0, 2.15, 0), Vector3.new(1, 0.7, 0.8), C.Iron, Enum.Material.Metal)
-	Kit.part(parent, "Yunque", anvil * CFrame.new(0, 2.75, 0), Vector3.new(2.6, 0.5, 1.1), C.Iron, Enum.Material.Metal)
-	Kit.part(parent, "Martillo", anvil * CFrame.new(0.4, 3.15, 0.1) * CFrame.Angles(0, math.rad(30), 0), Vector3.new(1.6, 0.18, 0.18), C.DarkWood, Enum.Material.Wood, false)
-	Kit.part(parent, "Martillo", anvil * CFrame.new(-0.3, 3.2, -0.3) * CFrame.Angles(0, math.rad(30), 0), Vector3.new(0.35, 0.35, 0.6), C.Iron, Enum.Material.Metal, false)
-	-- Tina de agua para templar.
-	Kit.barrel(parent, (cf * CFrame.new(4.5, 0, -5.5)).Position)
-	Kit.cylinder(parent, "Agua", (cf * CFrame.new(4.5, 2.9, -5.5)).Position, 0.1, 1.9, Color3.fromRGB(60, 100, 130), Enum.Material.Glass, false)
-	-- Armas terminadas apoyadas en la pared de la fragua.
-	for i = -1, 1 do
-		Kit.sword(parent, cf * CFrame.new(-6 + i * 0.9, 0, -1) * CFrame.Angles(math.rad(-12), 0, 0), 3.6, Color3.fromRGB(196, 200, 206))
+	-- ── Cerco: pilares de piedra + barandas de madera (abierto hacia la plaza) ──
+	local N, FR = 18, R + 2.2
+	local step = math.pi * 2 / N
+	for k = 1, N - 1 do
+		local a = openAngle + k * step
+		local cf = inward(FR, a, 0)
+		local tall = k == 1 or k == N - 1
+		local h = if tall then 6.2 else 3.8
+		Kit.part(parent, "BasePilar", cf * CFrame.new(0, 1.25, 0), V(1.5, 0.5, 1.5), STONE_DARK, SLATE)
+		Kit.part(parent, "Pilar", cf * CFrame.new(0, 1.5 + h / 2, 0), V(1.1, h, 1.1), STONE, COBBLE)
+		Kit.part(parent, "Banda", cf * CFrame.new(0, 1.5 + h - 0.35, 0), V(1.22, 0.18, 1.22), C.Gold, FOIL, false)
+		Kit.part(parent, "Capitel", cf * CFrame.new(0, 1.7 + h, 0), V(1.4, 0.4, 1.4), STONE_DARK, SLATE)
+		Kit.part(parent, "Punta", cf * CFrame.new(0, 2.25 + h, 0) * CFrame.Angles(math.rad(45), 0, math.rad(45)), V(0.62, 0.62, 0.62), C.Gold, Enum.Material.Metal, false)
+		for _, z in { -0.56, 0.56 } do
+			local gem = Kit.part(parent, "Gema", cf * CFrame.new(0, 1.5 + h * 0.62, z) * CFrame.Angles(0, 0, math.rad(45)), V(0.36, 0.36, 0.06), GLOW, NEON, false)
+			if tall then
+				Kit.part(parent, "Veta", cf * CFrame.new(0, 1.5 + h * 0.32, z), V(0.12, h * 0.36, 0.06), GLOW, NEON, false)
+				if z < 0 then glowAt(gem, 10, 1.2) end
+			end
+		end
 	end
-	local signCf = cf * CFrame.new(0, 0, -3.1)
-	Kit.sign(parent, signCf * CFrame.new(0, 5.8, 0), Vector3.new(5, 1.2, 0.25), "HERRERÍA")
-end
+	for k = 1, N - 2 do
+		local a0, a1 = openAngle + k * step, openAngle + (k + 1) * step
+		local p0, p1 = polar(FR, a0, 0), polar(FR, a1, 0)
+		local mid = (p0 + p1) / 2
+		local len = (p1 - p0).Magnitude - 1.1
+		local base = CFrame.lookAt(mid, mid + (p1 - p0))
+		for _, y in { 2.3, 3.6 } do
+			Kit.part(parent, "Baranda", base * CFrame.new(0, y, 0), V(0.35, 0.5, len), C.Wood, Enum.Material.Wood)
+			for _, s in { -1, 1 } do
+				Kit.part(parent, "Herraje", base * CFrame.new(0, y, s * (len / 2 - 0.25)), V(0.45, 0.62, 0.22), C.Iron, Enum.Material.Metal, false)
+			end
+		end
+		Kit.part(parent, "Listón", base * CFrame.new(0, 2.95, 0), V(0.3, 1.6, 0.3), C.DarkWood, Enum.Material.Wood)
+		if k % 3 == 2 then
+			local am = (a0 + a1) / 2
+			Kit.banner(parent, CFrame.lookAt(polar(FR + 0.4, am, 3.85), polar(FR + 5, am, 3.85)), 1.5, 2.2, C.Crimson)
+		end
+	end
 
-local function tent(parent: Instance, cf: CFrame, color: Color3)
-	local half, height = 3, 4.5
-	local slope = math.sqrt(half * half + height * height)
-	local angle = math.atan2(height, half)
+	-- ── Entrada: cartel a un lado, brasero en pedestal al otro ──
+	local signA = openAngle - step * 1.15
+	local scf = CFrame.lookAt(polar(R + 4.3, signA, 0.5), polar(R + 14, signA, 0.5))
+	for _, s in { -1, 1 } do
+		Kit.part(parent, "PilarCartel", scf * CFrame.new(s * 3.9, 2.6, 0), V(0.9, 5.2, 0.9), STONE, COBBLE)
+		Kit.part(parent, "Banda", scf * CFrame.new(s * 3.9, 5.35, 0), V(1.1, 0.3, 1.1), C.Gold, FOIL, false)
+		Kit.part(parent, "Veta", scf * CFrame.new(s * 3.9, 2.8, -0.46), V(0.14, 3, 0.04), GLOW, NEON, false)
+	end
+	Kit.part(parent, "MarcoCartel", scf * CFrame.new(0, 4, 0.02), V(7.4, 2.4, 0.3), C.Gold, FOIL, false)
+	local board = Kit.sign(parent, scf * CFrame.new(0, 4, 0), V(7, 2, 0.4), "ARENA DE DUELOS", true)
+	glowAt(board, 9, 0.8)
+	Kit.sword(parent, scf * CFrame.new(-0.8, 4.9, -0.1) * CFrame.Angles(0, 0, math.rad(-35)), 2.4, C.Gold)
+	Kit.sword(parent, scf * CFrame.new(0.8, 4.9, -0.1) * CFrame.Angles(0, 0, math.rad(35)), 2.4, C.Gold)
+	for _, s in { -1.8, 1.8 } do
+		Kit.banner(parent, scf * CFrame.new(s, 2.85, 0.1), 1.2, 1.8, C.Crimson)
+	end
+	Kit.sign(parent, scf * CFrame.new(0, 1.6, -0.1), V(5.6, 0.6, 0.2), "Pisá la arena para desafiar")
+	pedestal(polar(R + 4.3, openAngle + step * 1.15, 0.5), polar(R + 14, openAngle + step * 1.15, 0.5))
 	for _, side in { -1, 1 } do
-		Kit.part(parent, "Lona", cf * CFrame.new(0, height / 2, side * half / 2) * CFrame.Angles(side * (math.pi / 2 - angle), 0, 0),
-			Vector3.new(6, 0.2, slope), color, Enum.Material.Fabric)
+		pedestal(polar(R + 4.6, openAngle + side * 1.75, 0), center)
 	end
-	Kit.part(parent, "Cumbrera", cf * CFrame.new(0, height, 0), Vector3.new(6.6, 0.3, 0.3), C.DarkWood, Enum.Material.Wood, false)
-	for _, x in { -3.2, 3.2 } do
-		Kit.part(parent, "Palo", cf * CFrame.new(x, height / 2, 0), Vector3.new(0.25, height, 0.25), C.DarkWood, Enum.Material.Wood, false)
-	end
-end
 
-local function camp(parent: Instance)
-	local center = at(36, 0, -32)
-	tent(parent, facing(30, -38, 36, -32), C.Crimson)
-	tent(parent, facing(43, -36, 36, -32), C.Ivory)
-	-- Fogata.
-	for i = 0, 3 do
-		local a = i / 4 * math.pi
-		Kit.part(parent, "Leño", CFrame.new(center + Vector3.new(0, 0.4, 0)) * CFrame.Angles(0, a, math.rad(15)), Vector3.new(2.6, 0.45, 0.45), C.DarkWood, Enum.Material.Wood, false)
+	-- ── Muralla curva del fondo ──
+	local RW = R + 10
+	local half = math.rad(80)
+	local segments = 18
+	local seg = 2 * half * RW / segments + 0.15
+	for i = 0, segments - 1 do
+		local a = back - half + (i + 0.5) / segments * 2 * half
+		local cf = inward(RW, a, 0)
+		Kit.part(parent, "Muro", cf * CFrame.new(0, 6, 0), V(seg, 12, 2.5), WALL, COBBLE)
+		Kit.part(parent, "Zocalo", cf * CFrame.new(0, 1, -1.5), V(seg, 2, 0.6), STONE_DARK, SLATE)
+		Kit.part(parent, "Cornisa", cf * CFrame.new(0, 12.2, -0.1), V(seg, 0.4, 2.9), STONE_DARK, SLATE)
+		Kit.part(parent, "Friso", cf * CFrame.new(0, 10.6, -1.27), V(seg, 0.22, 0.06), C.Gold, FOIL, false)
+		if i % 2 == 0 then
+			Kit.part(parent, "Almena", cf * CFrame.new(0, 13.8, 0), V(seg * 0.6, 2.8, 2.5), WALL, COBBLE)
+		end
 	end
-	for i = 0, 7 do
-		local a = i / 8 * math.pi * 2
-		Kit.part(parent, "Piedra", CFrame.new(center + Vector3.new(math.cos(a) * 1.8, 0.3, math.sin(a) * 1.8)), Vector3.new(0.8, 0.6, 0.8), C.DarkStone, Enum.Material.Slate, false)
+
+	-- Torre-portal: pilastras con vetas doradas, estandarte, puerta enmarcada y escalinata.
+	local tcf = inward(RW - 1.2, back, 0)
+	Kit.part(parent, "Torre", tcf * CFrame.new(0, 9, 0), V(9, 18, 4.4), STONE_DARK, COBBLE)
+	Kit.part(parent, "Cornisa", tcf * CFrame.new(0, 18.2, 0), V(9.8, 0.5, 5), Color3.fromRGB(64, 60, 56), SLATE)
+	for _, x in { -3.6, -1.2, 1.2, 3.6 } do
+		Kit.part(parent, "Almena", tcf * CFrame.new(x, 19.7, 0), V(1.6, 2.6, 4.4), STONE_DARK, COBBLE)
 	end
-	local flame = Kit.part(parent, "Fogata", CFrame.new(center + Vector3.new(0, 0.8, 0)), Vector3.new(0.6, 0.6, 0.6), Color3.fromRGB(255, 120, 40), Enum.Material.Neon, false)
-	flame.Transparency = 0.4
-	local f = Instance.new("Fire")
-	f.Size, f.Heat = 5, 8
-	f.Parent = flame
-	local glow = Instance.new("PointLight")
-	glow.Color, glow.Range, glow.Brightness = Color3.fromRGB(255, 150, 70), 22, 2.4
-	glow.Parent = flame
-	Kit.embers(flame, 8)
-	-- Bancos de tronco y provisiones.
-	for _, offset in { Vector3.new(-3.5, 0, 2.5), Vector3.new(3.5, 0, 2.5) } do
-		local log = Kit.cylinder(parent, "Banco", center + offset + Vector3.new(0, 0.5, 0), 3, 1, C.Wood, Enum.Material.Wood)
-		log.CFrame = CFrame.new(log.Position) * CFrame.Angles(0, math.rad(90), 0)
+	for _, s in { -1, 1 } do
+		Kit.part(parent, "Pilastra", tcf * CFrame.new(s * 3.6, 9, -2.4), V(1.4, 18, 0.6), STONE, COBBLE)
+		Kit.part(parent, "Veta", tcf * CFrame.new(s * 3.6, 9.5, -2.72), V(0.2, 13, 0.06), GLOW, NEON, false)
+		Kit.part(parent, "Capitel", tcf * CFrame.new(s * 3.6, 17.6, -2.4), V(1.7, 0.4, 0.9), C.Gold, FOIL, false)
 	end
-	Kit.crate(parent, facing(47, -26, 36, -32), 2.8)
-	Kit.crate(parent, facing(49, -29, 36, -32) * CFrame.Angles(0, math.rad(20), 0), 2.2)
-	Kit.barrel(parent, at(26, 0, -27))
-	Kit.barrel(parent, at(27.5, 0, -25))
+	Kit.banner(parent, tcf * CFrame.new(0, 17.4, -2.55), 4.4, 7.5, C.Crimson)
+	local doorBottom = 1.7
+	Kit.part(parent, "Puerta", tcf * CFrame.new(0, doorBottom + 3, -2.21), V(3.6, 6, 0.1), Color3.fromRGB(26, 18, 14), Enum.Material.SmoothPlastic, false)
+	for _, s in { -1, 1 } do
+		Kit.part(parent, "Marco", tcf * CFrame.new(s * 2, doorBottom + 3.1, -2.3), V(0.35, 6.2, 0.25), C.Gold, FOIL, false)
+	end
+	Kit.part(parent, "Dintel", tcf * CFrame.new(0, doorBottom + 6.2, -2.3), V(4.35, 0.4, 0.25), C.Gold, FOIL, false)
+	local keystone = Kit.part(parent, "Gema", tcf * CFrame.new(0, doorBottom + 7, -2.3) * CFrame.Angles(0, 0, math.rad(45)), V(0.7, 0.7, 0.1), GLOW, NEON, false)
+	glowAt(keystone, 10, 1)
+	for j = 1, 3 do
+		local h = 0.5 + j * 0.4
+		Kit.part(parent, "Escalon", tcf * CFrame.new(0, h / 2, -2.2 - (4 - j) * 0.5), V(5, h, (4 - j) * 1.0), STONE, SLATE)
+	end
+	for _, s in { -1, 1 } do
+		Kit.lantern(parent, tcf * CFrame.new(s * 2.2, doorBottom, -2.7))
+		local spot = (tcf * CFrame.new(s * 5.8, 0, -3.6)).Position
+		pedestal(spot, center)
+	end
+
+	-- Nichos con armas a los costados de la torre.
+	for _, side in { -1, 1 } do
+		local acf = inward(RW - 1.3, back + side * math.rad(36), 0)
+		Kit.part(parent, "Nicho", acf * CFrame.new(0, 4.2, 0), V(4.2, 5, 0.12), Color3.fromRGB(42, 32, 28), SLATE, false)
+		for _, s in { -1, 1 } do
+			Kit.part(parent, "Jamba", acf * CFrame.new(s * 2.45, 4.2, -0.3), V(0.7, 5.6, 0.7), STONE, COBBLE)
+		end
+		Kit.part(parent, "Dintel", acf * CFrame.new(0, 7.3, -0.3), V(5.6, 0.8, 0.7), STONE, COBBLE)
+		Kit.part(parent, "Gema", acf * CFrame.new(0, 7.3, -0.68) * CFrame.Angles(0, 0, math.rad(45)), V(0.45, 0.45, 0.05), GLOW, NEON, false)
+		local shelf = Kit.part(parent, "Repisa", acf * CFrame.new(0, 1.6, -0.5), V(4.6, 0.3, 1.2), STONE_DARK, SLATE)
+		glowAt(shelf, 8, 0.9)
+		local foot = acf * CFrame.new(0, 1.75, -0.35)
+		if side < 0 then
+			Kit.sword(parent, foot * CFrame.new(-1.2, 0, 0), 3.8, Color3.fromRGB(205, 210, 220))
+			Kit.sword(parent, foot * CFrame.new(0, 0, 0), 4.2, Color3.fromRGB(190, 194, 200))
+			Kit.sword(parent, foot * CFrame.new(1.2, 0, 0), 3.8, C.Gold)
+		else
+			Kit.sword(parent, foot * CFrame.new(-1.2, 0, 0), 4.2, C.Gold)
+			-- Martillo con runa de rayo.
+			local hammer = foot * CFrame.new(0.3, 0, 0)
+			Kit.part(parent, "Mango", hammer * CFrame.new(0, 1.6, 0), V(0.25, 3.2, 0.25), C.DarkWood, Enum.Material.Wood, false)
+			Kit.part(parent, "Cabeza", hammer * CFrame.new(0, 3.3, 0), V(1.6, 0.9, 0.9), C.Iron, Enum.Material.Metal, false)
+			Kit.part(parent, "Runa", hammer * CFrame.new(0, 3.3, 0), V(1.62, 0.18, 0.92), Color3.fromRGB(110, 220, 255), NEON, false)
+			for _, s in { -1, 1 } do
+				Kit.part(parent, "Tapa", hammer * CFrame.new(s * 0.82, 3.3, 0), V(0.08, 1, 1), C.Gold, FOIL, false)
+			end
+			Kit.sword(parent, foot * CFrame.new(1.4, 0, 0), 3.6, Color3.fromRGB(150, 156, 166))
+		end
+		for _, s in { -1, 1 } do
+			Kit.lantern(parent, acf * CFrame.new(s * 1.9, 0, -1.1))
+		end
+	end
+
+	-- Estandartes grandes y chicos, antorchas (pocas: el sonido queda sutil) y enredaderas.
+	for _, side in { -1, 1 } do
+		Kit.banner(parent, inward(RW - 1.3, back + side * math.rad(64), 0) * CFrame.new(0, 11.6, 0), 4, 8, C.Crimson)
+		Kit.banner(parent, inward(RW - 1.3, back + side * math.rad(18), 0) * CFrame.new(0, 11.2, 0), 2, 5, C.Crimson)
+		Kit.torch(parent, inward(RW - 1.25, back + side * math.rad(50), 0) * CFrame.new(0, 6.5, 0))
+		for _, deg in { 24, 56, 76 } do
+			local vcf = inward(RW - 1.32, back + side * math.rad(deg), 0)
+			for j = -1, 1 do
+				local len = 3 + (j + 2) * 1.3
+				Kit.part(parent, "Enredadera", vcf * CFrame.new(j * 0.45, 12 - len / 2, 0), V(0.22, len, 0.12), VINE, Enum.Material.Grass, false)
+				for t = 1, math.floor(len / 0.9) do
+					local dx = if t % 2 == 0 then 0.2 else -0.2
+					Kit.part(parent, "Hoja", vcf * CFrame.new(j * 0.45 + dx, 12 - t * 0.9, -0.05) * CFrame.Angles(0, 0, math.rad(dx * 120)), V(0.5, 0.32, 0.08), LEAF, Enum.Material.Grass, false)
+				end
+			end
+		end
+	end
 end
 
 -- Polvo flotando sobre toda la plaza, iluminado por el atardecer.
@@ -645,24 +870,19 @@ local function dust(parent: Instance)
 end
 
 function LobbyService:Init()
-	local spawn = workspace:FindFirstChildWhichIsA("SpawnLocation", true)
-	origin = if spawn then spawn.Position else Vector3.zero
-	ground = if spawn then origin.Y - spawn.Size.Y / 2 else 0
+	-- Centro del lobby (el spawn queda al sur, ver Lobby/Layout).
+	origin, ground = Layout.Base()
 
 	setupLighting()
 	local folder = Instance.new("Folder")
 	folder.Name = "Lobby"
-	plaza(folder)
+	grounds(folder)
 	fortress(folder)
-	shopStall(folder, facing(-8.5, -21, 0, 0), false) -- armas
-	shopStall(folder, facing(8.5, -21, 0, 0), true) -- armaduras
+	shopStall(folder, Layout.Facing(Layout.WEAPON_SHOP), false) -- armas
+	shopStall(folder, Layout.Facing(Layout.ARMOR_SHOP), true) -- armaduras
 	hallOfFame(folder)
-	signpost(folder, 10, -10)
-	statue(folder)
-	trainingGround(folder)
+	trainingGround(folder, Layout.TRAINING.X, Layout.TRAINING.Y, -1)
 	duelPit(folder)
-	forge(folder)
-	camp(folder)
 	dust(folder)
 	folder.Parent = workspace
 	task.spawn(mountains) -- el terreno tarda un poco; no frena el resto

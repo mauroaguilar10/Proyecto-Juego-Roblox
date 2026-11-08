@@ -11,6 +11,7 @@
 local Players = game:GetService("Players")
 local DataStoreService = game:GetService("DataStoreService")
 local Data = require(script.Parent:WaitForChild("DataService"))
+local Layout = require(script.Parent:WaitForChild("Lobby"):WaitForChild("Layout"))
 local RecordsService = {}
 
 local REFRESH_SECONDS = 60
@@ -93,17 +94,14 @@ local function fetchTop(): { Entry }
 end
 
 local function buildBoard(): { TextLabel }
-	local spawn = workspace:FindFirstChildWhichIsA("SpawnLocation", true)
-	local origin = if spawn then spawn.Position else Vector3.zero
-	local position = origin + Vector3.new(-14, BOARD_SIZE.Y / 2 + 1, 0)
 	local board = Instance.new("Part")
 	board.Name = "TablaDeRecords"
 	board.Anchored = true
 	board.Size = BOARD_SIZE
 	board.Color = Color3.fromRGB(15, 19, 26)
 	board.Material = Enum.Material.SmoothPlastic
-	-- La cara frontal mira hacia el spawn.
-	board.CFrame = CFrame.lookAt(position, Vector3.new(origin.X, position.Y, origin.Z))
+	-- Posición según el plano del lobby (Lobby/Layout): noroeste; la cara frontal mira al camino.
+	board.CFrame = Layout.Facing(Layout.RECORDS, BOARD_SIZE.Y / 2 + 1.5)
 
 	local gui = Instance.new("SurfaceGui")
 	gui.Face = Enum.NormalId.Front
