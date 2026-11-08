@@ -4,8 +4,10 @@
 	Owner: Dev A (Combat).
 
 	El arma es una Tool de inventario (ver WeaponVisualService). Con ella en la mano:
-	  - Atacar:   Tool.Activated (click / toque / R2) → CombatAttack("Attack", aim)
-	              Gira al personaje hacia el cursor/toque (o la cámara con gamepad).
+	  - Atacar:   Tool.Activated/Deactivated (click / toque / R2). Un toque corto → al soltar
+	              CombatAttack("Attack", aim). Gira al personaje hacia el cursor/toque (o la cámara).
+	  - Cargado:  mantener más de CHARGE_HOLD_DELAY → CombatAttack("ChargeStart"); al soltar
+	              CombatAttack("ChargeRelease", aim). Cargado al llegar a CHARGE_TIME (+5 de daño).
 	  - Guardia:  mantener F / L2 / botón táctil → CombatAttack("Block", true/false)
 	              Los primeros 0,22 s son parry; soltar sin desviar nada pone el parry en cooldown.
 	  - Dash:     Q / L1 / botón táctil → CombatAttack("Dash"). Dirección relativa a la cámara
@@ -45,8 +47,11 @@ local COMBO_LENGTH = 3
 local DASH_COOLDOWN = 2
 local DASH_DURATION = 0.25
 local PARRY_WINDOW = 0.22
+local CHARGE_TIME = 0.6
+local CHARGE_COOLDOWN = 5
 
 -- Solo cliente
+local CHARGE_HOLD_DELAY = 0.2 -- s apretado para que cuente como "mantener" (un clic normal dura menos)
 local DASH_SPEED = 64 -- velocidad inicial del dash (studs/s)
 local DASH_MAX_ACCEL = 2000
 local FREE_STATES: { [string]: boolean } = { Idle = true, Blocking = true }
@@ -79,6 +84,11 @@ local ACTION_DASH = "CombatDash"
 local localPlayer = Players.LocalPlayer
 local lastAttackAt = -math.huge
 local lastDashAt = -math.huge
+local pressToken = 0 -- cada pulsación del ataque; invalida la carga de una pulsación vieja
+local attackHeld = false
+local charging = false
+local chargeBeganAt = 0
+local lastChargedAt = -math.huge -- predicción del CHARGE_COOLDOWN (el servidor valida)
 local hookedTools: { [Tool]: boolean } = setmetatable({}, { __mode = "k" }) :: any
 
 local CombatController = {}
@@ -157,6 +167,16 @@ end
 
 -- ══════════════════ Acciones ══════════════════
 
+-- Gira al personaje hacia donde apunta para que lo que se ve coincida con lo que valida el
+-- servidor, y devuelve esa dirección (nil = hacia donde ya mira).
+local function faceAim(root: BasePart): Vector3?
+	local aim = getAimDirection(root)
+	if aim then
+		root.CFrame = CFrame.lookAt(root.Position, root.Position + aim)
+	end
+	return aim
+end
+
 local function attack(attackEvent: RemoteEvent)
 	local _, humanoid, root = getLocalHumanoid()
 	if not humanoid or not root or not isFree(humanoid) then
@@ -168,12 +188,53 @@ local function attack(attackEvent: RemoteEvent)
 	end
 	lastAttackAt = now
 
-	local aim = getAimDirection(root)
-	if aim then
-		-- Girar al personaje hacia el golpe para que lo que se ve coincida con lo que valida el servidor.
-		root.CFrame = CFrame.lookAt(root.Position, root.Position + aim)
+	attackEvent:FireServer("Attack", faceAim(root))
+end
+
+-- Apretar: si sigue apretado después de CHARGE_HOLD_DELAY, empieza a cargar.
+local function onAttackPressed(attackEvent: RemoteEvent)
+	pressToken += 1
+	local token = pressToken
+	attackHeld = true
+	charging = false
+	task.delay(CHARGE_HOLD_DELAY, function()
+		if token ~= pressToken or not attackHeld then
+			return
+		end
+		local _, humanoid = getLocalHumanoid()
+		if not humanoid or not isFree(humanoid) then
+			return -- ocupado: al soltar se intenta un golpe normal
+		end
+		if os.clock() - lastAttackAt < weaponOf(localPlayer).AttackCooldown then
+			return
+		end
+		if os.clock() - lastChargedAt < CHARGE_COOLDOWN then
+			return -- cargado en cooldown: al soltar sale un golpe normal
+		end
+		charging = true
+		chargeBeganAt = os.clock()
+		attackEvent:FireServer("ChargeStart")
+	end)
+end
+
+-- Soltar: lanza el cargado (el servidor decide si llegó a cargarse) o un golpe normal.
+local function onAttackReleased(attackEvent: RemoteEvent)
+	if not attackHeld then
+		return
 	end
-	attackEvent:FireServer("Attack", aim)
+	attackHeld = false
+	pressToken += 1
+	if charging then
+		charging = false
+		lastAttackAt = os.clock()
+		if lastAttackAt - chargeBeganAt >= CHARGE_TIME then
+			lastChargedAt = lastAttackAt -- salió cargado: empieza el cooldown
+		end
+		local _, _, root = getLocalHumanoid()
+		attackEvent:FireServer("ChargeRelease", if root then faceAim(root) else nil)
+	else
+		attack(attackEvent)
+	end
 end
 
 local function dash(attackEvent: RemoteEvent)
@@ -235,7 +296,12 @@ local function hookWeaponTool(child: Instance, attackEvent: RemoteEvent)
 
 	child.Activated:Connect(function()
 		if child.Parent == localPlayer.Character then
-			attack(attackEvent)
+			onAttackPressed(attackEvent)
+		end
+	end)
+	child.Deactivated:Connect(function()
+		if child.Parent == localPlayer.Character then
+			onAttackReleased(attackEvent)
 		end
 	end)
 	child.Equipped:Connect(function()
@@ -245,6 +311,8 @@ local function hookWeaponTool(child: Instance, attackEvent: RemoteEvent)
 	end)
 	child.Unequipped:Connect(function()
 		unbindActions(attackEvent)
+		attackHeld, charging = false, false -- el servidor cancela la carga al guardar el arma
+		pressToken += 1
 	end)
 
 	if child.Parent == localPlayer.Character then
@@ -282,6 +350,17 @@ local function onCombatState(player: Player, character: Model, humanoid: Humanoi
 		if style.special then
 			CombatFx.Charge(character, style, weapon.WindupTime)
 		end
+	elseif state == "Charging" then
+		-- Carga: pose del golpe pesado sostenida, aura en los pies y aviso cuando ya está cargado.
+		CombatAnimations.PlayWindup(character, COMBO_LENGTH, 0.25, if style.windup then style.windup[COMBO_LENGTH] else nil)
+		CombatVisuals.WindupGlint(character, false)
+		CombatFx.Charge(character, style, CHARGE_TIME)
+		task.delay(CHARGE_TIME, function()
+			if humanoid:GetAttribute("CombatState") == "Charging" then
+				CombatVisuals.WindupGlint(character, true)
+				CombatEffects.PlaySound("ChargeReady", humanoid.RootPart)
+			end
+		end)
 	elseif state == "Attacking" then
 		CombatAnimations.PlaySlash(character, combo, weapon.Weight, if style.slash then style.slash[combo] else nil,
 			if style.windup then style.windup[combo] else nil)
@@ -317,7 +396,7 @@ local function onCombatState(player: Player, character: Model, humanoid: Humanoi
 			CombatAnimations.PlayDash(character, root.CFrame:VectorToObjectSpace(direction), DASH_DURATION)
 			CombatVisuals.Dash(character, direction, DASH_DURATION)
 		end
-	elseif state == "Dead" or previous == "Windup" then
+	elseif state == "Dead" or previous == "Windup" or previous == "Charging" then
 		CombatAnimations.Reset(character) -- muerte o ataque cancelado sin pasar por otro estado
 	else
 		CombatAnimations.SetMode(character, "None") -- Idle / Recovery
@@ -441,6 +520,9 @@ local function onFeedback(payload: any)
 		end
 		CombatEffects.Popup(target, `-{damage}`, if finisher then colors.Finisher else colors.Damage, finisher or payload.Killed == true)
 		CombatEffects.PlaySound(if finisher then "Heavy" else "Hit", targetRoot)
+		if payload.Charged == true then
+			CombatEffects.Popup(target, "¡Cargado!", colors.Finisher)
+		end
 		if payload.Interrupted == true then
 			CombatEffects.Popup(target, "¡Interrumpido!", colors.Info)
 		elseif payload.Hyperarmor == true then
