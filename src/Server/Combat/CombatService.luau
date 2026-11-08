@@ -10,6 +10,9 @@
 	  marcan AttackCooldown + RecoveryTime. WindupTime solo queda para la animación.)
 	   │  ▲            │ (golpeado: Stunned, salvo hyperarmor)        (corta si conectó)
 	   │  └────────────┴──────────────────────────────────────────────────────┘
+	   ├──mantener clic──► Charging ──soltar──► Attacking (ataque cargado: Damage + 5 si cargó
+	   │                   CHARGE_TIME; si suelta antes, golpe normal. A los CHARGE_MAX_HOLD s sale solo.
+	   │                   Entre dos cargados hay CHARGE_COOLDOWN s; mientras tanto, mantener = golpe normal)
 	   ├──F──► Parrying ──0,22 s──► Blocking (mientras se mantenga F)
 	   ├──Q──► Dashing (0,25 s; i-frames los primeros 0,12 s)
 	   └── golpe recibido ──► Stunned / PostureBroken (Posture llegó a 100)
@@ -18,6 +21,9 @@
 	════ Remote "CombatAttack" (C→S), primer argumento = acción ════
 	  ()  o  ("Attack", aim?) → atacar desde Idle o Blocking. aim: Vector3 opcional (cursor/toque/cámara);
 	                            si falta o es inválido se usa hacia donde mira el personaje.
+	  ("ChargeStart")         → mantiene el ataque apretado: entra a "Charging" (desde Idle o Blocking).
+	  ("ChargeRelease", aim?) → suelta: ataque cargado si pasó CHARGE_TIME, si no golpe normal.
+	                            Recibir un golpe mientras carga lo cancela (Stunned).
 	  ("Block", boolean)      → mantener / soltar F. Los primeros PARRY_WINDOW s son "Parrying".
 	  ("Dash")                → esquive. El movimiento lo hace el cliente (es dueño de su física);
 	                            el servidor valida el cooldown, pone "Dashing" y da los i-frames.
@@ -61,6 +67,7 @@ local WeaponVisualService = require(script.Parent:WaitForChild("WeaponVisualServ
 export type CombatState =
 	"Idle"
 	| "Windup"
+	| "Charging"
 	| "Attacking"
 	| "Recovery"
 	| "Parrying"
@@ -79,7 +86,8 @@ export type HitFeedback = {
 	Damage: number, -- daño real a la vida (0 en Blocked / Parry / Dodge)
 	Killed: boolean,
 	WeaponId: string,
-	Combo: number, -- 1..COMBO_LENGTH
+	Combo: number, -- 1..COMBO_LENGTH (el ataque cargado manda COMBO_LENGTH para los efectos pesados)
+	Charged: boolean, -- fue un ataque cargado
 	Interrupted: boolean, -- el golpe canceló el windup del objetivo
 	Hyperarmor: boolean, -- el objetivo aguantó el golpe sin cancelar su ataque
 	Intensity: number, -- 0..1, para hitstop y sacudida de cámara en el cliente
@@ -88,6 +96,7 @@ export type HitFeedback = {
 type AttackContext = {
 	weapon: WeaponData.WeaponStats,
 	combo: number,
+	charged: boolean,
 	direction: Vector3, -- horizontal, unitario
 	strikeAt: number, -- os.clock() en que sale el hitbox
 	landed: boolean,
@@ -113,6 +122,9 @@ type Fighter = {
 	parryStartedAt: number?,
 	parryDeflected: boolean,
 	parryCooldownUntil: number,
+	chargeStartedAt: number?,
+	lastChargedAt: number?, -- último ataque cargado que salió (para CHARGE_COOLDOWN)
+	chargeAutoReleased: boolean, -- la carga salió sola: ignorar el próximo ChargeRelease
 	lastDashAt: number?,
 	iframesUntil: number,
 	postureCalmSince: number, -- último momento en que bloqueó o recibió un golpe
@@ -142,6 +154,13 @@ local COMBO_WINDOW = 0.6 -- s tras quedar libre para encadenar el siguiente golp
 local FINISHER_DAMAGE_MULT = 1.5
 local FINISHER_POSTURE_MULT = 1.5
 local HYPERARMOR_WINDOW = 0.15 -- últimos s del windup de un arma Heavy
+
+-- Ataque cargado (mantener el ataque apretado)
+local CHARGE_TIME = 0.6 -- s en "Charging" para que quede cargado (el cliente usa el mismo valor)
+local CHARGE_MAX_HOLD = 3 -- s: si no suelta, el ataque cargado sale solo
+local CHARGE_BONUS_DAMAGE = 5 -- daño extra fijo sobre el Damage del arma
+local CHARGE_COOLDOWN = 5 -- s entre un ataque cargado y poder cargar otro
+local CHARGE_COOLDOWN_SLACK = 0.3 -- s de tolerancia de red
 
 -- Movilidad por estado (multiplicadores de la WalkSpeed base)
 local WEIGHT_SPEED_MULT: { [WeaponData.WeaponWeight]: number } = {
@@ -207,6 +226,7 @@ local function getState(humanoid: Humanoid): CombatState
 	local value = humanoid:GetAttribute("CombatState")
 	if
 		value == "Windup"
+		or value == "Charging"
 		or value == "Attacking"
 		or value == "Recovery"
 		or value == "Parrying"
@@ -345,7 +365,7 @@ local function applyMovement(fighter: Fighter, state: CombatState)
 	end
 
 	local walk, canJump = base.walkSpeed, true
-	if state == "Windup" or state == "Attacking" then
+	if state == "Windup" or state == "Attacking" or state == "Charging" then
 		local weapon = if fighter.attack then fighter.attack.weapon else getEquippedWeapon(fighter.player)
 		walk *= WEIGHT_SPEED_MULT[weapon.Weight]
 		canJump = false
@@ -485,6 +505,7 @@ local function breakPosture(fighter: Fighter)
 	end
 	fighter.attack = nil
 	fighter.parryStartedAt = nil
+	fighter.chargeStartedAt = nil
 	fighter.combo = 0
 	humanoid:SetAttribute("Posture", POSTURE_MAX)
 	enterState(fighter, "PostureBroken", POSTURE_BROKEN_TIME, function()
@@ -502,6 +523,7 @@ local function stun(fighter: Fighter, duration: number)
 	end
 	fighter.attack = nil
 	fighter.parryStartedAt = nil
+	fighter.chargeStartedAt = nil
 	fighter.combo = 0
 	enterState(fighter, "Stunned", duration)
 end
@@ -616,7 +638,7 @@ local function resolveParry(attacker: Fighter, defender: Fighter, feedback: HitF
 end
 
 local function resolveBlock(ctx: AttackContext, defender: Fighter, defenderRoot: BasePart, feedback: HitFeedback, pushDirection: Vector3)
-	local postureDamage = ctx.weapon.PostureDamage * (if ctx.combo == COMBO_LENGTH then FINISHER_POSTURE_MULT else 1)
+	local postureDamage = ctx.weapon.PostureDamage * (if ctx.combo == COMBO_LENGTH or ctx.charged then FINISHER_POSTURE_MULT else 1)
 	if addPosture(defender, postureDamage) then
 		breakPosture(defender)
 		CombatService.ApplyPhysicalImpulse(defenderRoot, pushDirection, PUSH.GuardBreak.force, PUSH.GuardBreak.duration)
@@ -643,7 +665,8 @@ local function resolveHit(attacker: Fighter, ctx: AttackContext, targetHumanoid:
 	end
 
 	local now = os.clock()
-	local finisher = ctx.combo == COMBO_LENGTH
+	local finisher = ctx.combo == COMBO_LENGTH and not ctx.charged
+	local heavy = finisher or ctx.charged -- empuje e intensidad de remate
 	local pushDirection = flat(targetRoot.Position - attackerRoot.Position)
 	if pushDirection.Magnitude < 0.1 then
 		pushDirection = ctx.direction
@@ -657,9 +680,10 @@ local function resolveHit(attacker: Fighter, ctx: AttackContext, targetHumanoid:
 		Killed = false,
 		WeaponId = ctx.weapon.Id,
 		Combo = ctx.combo,
+		Charged = ctx.charged,
 		Interrupted = false,
 		Hyperarmor = false,
-		Intensity = if finisher then 0.7 else 0.45,
+		Intensity = if heavy then 0.7 else 0.45,
 	}
 
 	-- ── Defensas (solo jugadores) ──
@@ -687,7 +711,9 @@ local function resolveHit(attacker: Fighter, ctx: AttackContext, targetHumanoid:
 
 	-- ── Golpe limpio ──
 	local targetState = getState(targetHumanoid)
-	local damage = ctx.weapon.Damage * (if finisher then FINISHER_DAMAGE_MULT else 1)
+	local damage = if ctx.charged
+		then ctx.weapon.Damage + CHARGE_BONUS_DAMAGE
+		else ctx.weapon.Damage * (if finisher then FINISHER_DAMAGE_MULT else 1)
 	if targetState == "PostureBroken" then
 		damage *= POSTURE_BROKEN_DAMAGE_MULT
 	end
@@ -738,7 +764,7 @@ local function resolveHit(attacker: Fighter, ctx: AttackContext, targetHumanoid:
 		end
 
 		if not feedback.Hyperarmor then
-			local push = if finisher then PUSH.Finisher else PUSH.Hit
+			local push = if heavy then PUSH.Finisher else PUSH.Hit
 			CombatService.ApplyPhysicalImpulse(targetRoot, pushDirection, push.force, push.duration)
 		end
 	end
@@ -787,42 +813,105 @@ local function strike(fighter: Fighter, ctx: AttackContext)
 	end
 end
 
-local function onAttack(player: Player, aim: unknown)
+-- Valida que el jugador pueda empezar una acción ofensiva (atacar o cargar) desde Idle/Blocking.
+local function canStartAttack(player: Player): (Fighter?, Humanoid?, BasePart?)
 	local fighter = getAliveFighter(player)
 	local humanoid = if fighter then fighter.humanoid else nil
 	local root = if fighter then fighter.root else nil
 	if not fighter or not humanoid or not root or not WeaponVisualService.IsWeaponHeld(player) then
-		return
+		return nil, nil, nil
 	end
-
 	local state = getState(humanoid)
 	if state ~= "Idle" and state ~= "Blocking" then
-		return
+		return nil, nil, nil
 	end
-
-	local weapon = getEquippedWeapon(player)
-	local now = os.clock()
 	local last = fighter.lastAttackAt
-	if last and now - last < weapon.AttackCooldown * COOLDOWN_TOLERANCE then
-		return
+	if last and os.clock() - last < getEquippedWeapon(player).AttackCooldown * COOLDOWN_TOLERANCE then
+		return nil, nil, nil
 	end
+	return fighter, humanoid, root
+end
 
-	fighter.combo = if now <= fighter.comboUntil then fighter.combo % COMBO_LENGTH + 1 else 1
+-- Golpe instantáneo: sin Windup, el hitbox sale en el mismo clic. El ritmo lo marca
+-- AttackCooldown + Recovery. WindupTime solo se usa para la animación del cliente.
+-- `charged`: ataque cargado (Damage + CHARGE_BONUS_DAMAGE, efectos de remate, reinicia el combo).
+local function launchAttack(fighter: Fighter, humanoid: Humanoid, root: BasePart, aim: unknown, charged: boolean)
+	local now = os.clock()
+	if charged then
+		fighter.lastChargedAt = now
+		fighter.combo = 0 -- el próximo golpe normal vuelve a empezar el combo
+	else
+		fighter.combo = if now <= fighter.comboUntil then fighter.combo % COMBO_LENGTH + 1 else 1
+	end
 	fighter.lastAttackAt = now
+	fighter.chargeStartedAt = nil
 
 	local ctx: AttackContext = {
-		weapon = weapon,
-		combo = fighter.combo,
+		weapon = getEquippedWeapon(fighter.player),
+		combo = if charged then COMBO_LENGTH else fighter.combo, -- el cargado usa el tajo pesado
+		charged = charged,
 		direction = attackDirection(root, aim),
 		strikeAt = now,
 		landed = false,
 	}
 	fighter.attack = ctx
 	humanoid:SetAttribute("ComboStep", ctx.combo)
-
-	-- Golpe instantáneo: sin Windup, el hitbox sale en el mismo clic. El ritmo lo marca
-	-- AttackCooldown (arriba) + Recovery. WindupTime solo se usa para la animación del cliente.
 	strike(fighter, ctx)
+end
+
+local function onAttack(player: Player, aim: unknown)
+	local fighter, humanoid, root = canStartAttack(player)
+	if fighter and humanoid and root then
+		launchAttack(fighter, humanoid, root, aim, false)
+	end
+end
+
+-- Suelta la carga: cargado si llegó a CHARGE_TIME (con tolerancia de red), si no golpe normal.
+local function releaseCharge(fighter: Fighter, aim: unknown)
+	local humanoid, root = fighter.humanoid, fighter.root
+	local startedAt = fighter.chargeStartedAt
+	if not humanoid or not root or not startedAt or getState(humanoid) ~= "Charging" then
+		return
+	end
+	if not WeaponVisualService.IsWeaponHeld(fighter.player) then
+		fighter.chargeStartedAt = nil
+		settle(fighter)
+		return
+	end
+	local charged = os.clock() - startedAt >= CHARGE_TIME * COOLDOWN_TOLERANCE
+	launchAttack(fighter, humanoid, root, aim, charged)
+end
+
+local function onChargeStart(player: Player)
+	local fighter = canStartAttack(player)
+	if not fighter then
+		return
+	end
+	local lastCharged = fighter.lastChargedAt
+	if lastCharged and os.clock() - lastCharged < CHARGE_COOLDOWN - CHARGE_COOLDOWN_SLACK then
+		return -- en cooldown: al soltar sale un golpe normal (ver onChargeRelease)
+	end
+	fighter.chargeStartedAt = os.clock()
+	fighter.chargeAutoReleased = false
+	enterState(fighter, "Charging", CHARGE_MAX_HOLD, function()
+		fighter.chargeAutoReleased = true
+		releaseCharge(fighter, nil) -- no soltó: sale solo hacia donde mira
+	end)
+end
+
+local function onChargeRelease(player: Player, aim: unknown)
+	local fighter = getAliveFighter(player)
+	local humanoid = if fighter then fighter.humanoid else nil
+	if not fighter or not humanoid then
+		return
+	end
+	if fighter.chargeAutoReleased then
+		fighter.chargeAutoReleased = false -- ya salió solo; soltar no hace otro golpe
+	elseif getState(humanoid) == "Charging" then
+		releaseCharge(fighter, aim)
+	else
+		onAttack(player, aim) -- el ChargeStart no entró (cooldown/latencia): golpe normal
+	end
 end
 
 -- ══════════════════ Guardia y dash ══════════════════
@@ -894,6 +983,10 @@ end
 local function onCombatAction(player: Player, action: unknown, value: unknown)
 	if action == nil or action == "Attack" then
 		onAttack(player, value)
+	elseif action == "ChargeStart" then
+		onChargeStart(player)
+	elseif action == "ChargeRelease" then
+		onChargeRelease(player, value)
 	elseif action == "Block" then
 		onBlock(player, value == true)
 	elseif action == "Dash" then
@@ -919,6 +1012,9 @@ local function tick(dt: number)
 				closeParryWindow(fighter)
 				enterState(fighter, "Idle")
 			end
+		elseif state == "Charging" and not WeaponVisualService.IsWeaponHeld(player) then
+			fighter.chargeStartedAt = nil -- guardó el arma mientras cargaba
+			settle(fighter)
 		elseif state ~= "PostureBroken" and now - fighter.postureCalmSince >= POSTURE_REGEN_DELAY then
 			local posture = getPosture(humanoid)
 			if posture > 0 then
@@ -939,6 +1035,7 @@ local function newFighter(player: Player): Fighter
 		blockHeld = false,
 		parryDeflected = false,
 		parryCooldownUntil = 0,
+		chargeAutoReleased = false,
 		iframesUntil = 0,
 		postureCalmSince = 0,
 	}
@@ -974,6 +1071,7 @@ local function onCharacterAdded(player: Player, character: Model)
 			fighter.stateToken += 1 -- cancela timers pendientes
 			fighter.attack = nil
 			fighter.blockHeld = false
+			fighter.chargeStartedAt = nil
 		end
 	end)
 end

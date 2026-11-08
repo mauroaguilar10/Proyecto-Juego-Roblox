@@ -41,7 +41,7 @@ El **escritor** es el único que puede hacer `SetAttribute`. Los demás solo lee
 | `Gold`           | `Player`                                | `number`  | entero ≥ 0                                       | `DataService` (B)            | `UIController`, `ShopService`    |
 | `EquippedWeapon` | `Player`                                | `string`  | clave válida de `WeaponData.Weapons`             | `ShopService` / `DataService` (B) | `CombatService`, `CombatController`, `UIController` |
 | `InDuel`         | `Player`                                | `boolean` | `true` durante un duelo (incluye cuenta regresiva) | `ArenaService` (A)           | `ShopService`, `DungeonService`, `UIController` |
-| `CombatState`    | `Humanoid` (jugadores y enemigos)       | `string`  | Jugadores: `"Idle"` \| `"Windup"` \| `"Attacking"` \| `"Recovery"` \| `"Parrying"` \| `"Blocking"` \| `"PostureBroken"` \| `"Stunned"` \| `"Dashing"` \| `"Dead"`. Enemigos: solo `"Idle"` \| `"Stunned"` \| `"Dead"` | `CombatService` (A)          | `CombatController`, `UIController`, `DungeonService` |
+| `CombatState`    | `Humanoid` (jugadores y enemigos)       | `string`  | Jugadores: `"Idle"` \| `"Windup"` \| `"Charging"` \| `"Attacking"` \| `"Recovery"` \| `"Parrying"` \| `"Blocking"` \| `"PostureBroken"` \| `"Stunned"` \| `"Dashing"` \| `"Dead"`. Enemigos: solo `"Idle"` \| `"Stunned"` \| `"Dead"` | `CombatService` (A)          | `CombatController`, `UIController`, `DungeonService` |
 | `LastAttacker`   | `Humanoid` de enemigos de mazmorra      | `number`  | `UserId` del último jugador que golpeó (0 = nadie) | `CombatService` (A)          | `DungeonService` (recompensa en oro) |
 | `Posture`        | `Humanoid` de jugadores                 | `number`  | `0..100`; sube al bloquear/ser desviado, 100 = guardia rota | `CombatService` (A)          | `CombatController`, `HealthBarController` |
 | `ComboStep`      | `Humanoid` de jugadores                 | `number`  | `1..3`, golpe del combo en curso (0 = ninguno)    | `CombatService` (A)          | `CombatController` |
@@ -147,6 +147,7 @@ torres, estatua, herrería, campamento, arena de duelos decorativa y el puesto d
 **Remotes de combate**
 
 - `CombatAttack` (C→S): primer argumento = acción. `()` o `("Attack", aim: Vector3?)` atacar,
+  `("ChargeStart")` / `("ChargeRelease", aim: Vector3?)` mantener/soltar el ataque (cargado = Damage + 5),
   `("Block", boolean)` mantener/soltar F, `("Dash")` esquivar.
 - `CombatFeedback` (S→C, a los jugadores a ≤150 studs): `{ Kind: "Hit" | "Blocked" | "Parry" | "GuardBreak" | "Dodge",
   Attacker: Player, Target: Model, Damage: number, Killed: boolean, WeaponId: string, Combo: number,

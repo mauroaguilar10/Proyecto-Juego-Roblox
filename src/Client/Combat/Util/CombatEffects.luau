@@ -18,7 +18,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
-export type SoundName = "Swing" | "Heavy" | "Hit" | "Block" | "Parry" | "GuardBreak" | "Equip" | "Dash"
+export type SoundName = "Swing" | "Heavy" | "Hit" | "Block" | "Parry" | "GuardBreak" | "Equip" | "Dash" | "ChargeReady"
 
 local SOUNDS: { [SoundName]: { id: string, volume: number, speed: number } } = {
 	Swing = { id = "rbxasset://sounds/swordslash.wav", volume = 0.5, speed = 1.1 },
@@ -29,6 +29,7 @@ local SOUNDS: { [SoundName]: { id: string, volume: number, speed: number } } = {
 	GuardBreak = { id = "rbxasset://sounds/swordlunge.wav", volume = 1, speed = 0.55 },
 	Equip = { id = "rbxasset://sounds/unsheath.wav", volume = 0.5, speed = 1 },
 	Dash = { id = "rbxasset://sounds/swordslash.wav", volume = 0.35, speed = 1.6 },
+	ChargeReady = { id = "rbxasset://sounds/unsheath.wav", volume = 0.8, speed = 1.8 },
 }
 
 local SPARK_TEXTURE = "rbxasset://textures/particles/sparkles_main.dds"

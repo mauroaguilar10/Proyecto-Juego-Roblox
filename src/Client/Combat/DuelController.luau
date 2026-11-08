@@ -56,6 +56,72 @@ local hudToken = 0
 
 local DuelController = {}
 
+-- ── Noche en el coliseo ──
+-- Solo en este cliente (el lobby sigue con su atardecer para los demás): al empezar el duelo
+-- se hace de noche y al volver se restaura lo que había. ClockTime va de 17,4 a 22 hacia
+-- adelante, así la transición pasa por el anochecer y no por el mediodía.
+local Lighting = game:GetService("Lighting")
+local END_RETURN_DELAY = 2.5 -- igual que ArenaService: cuándo vuelve al lobby
+local NIGHT_LIGHT: { [string]: any } = {
+	ClockTime = 22,
+	Brightness = 0.6,
+	Ambient = Color3.fromRGB(34, 36, 56),
+	OutdoorAmbient = Color3.fromRGB(52, 56, 84),
+	ExposureCompensation = 0.1,
+}
+local NIGHT_ATMOSPHERE: { [string]: any } = {
+	Density = 0.3,
+	Color = Color3.fromRGB(60, 66, 100),
+	Decay = Color3.fromRGB(24, 26, 44),
+	Glare = 0,
+	Haze = 1,
+}
+local savedNight: { light: { [string]: any }, atmosphere: { [string]: any }, target: Atmosphere? }? = nil
+local nightToken = 0
+
+local function snapshot(instance: Instance, goals: { [string]: any }): { [string]: any }
+	local saved = {}
+	for property in goals do
+		saved[property] = (instance :: any)[property]
+	end
+	return saved
+end
+
+local function setArenaNight(on: boolean)
+	nightToken += 1
+	local info = TweenInfo.new(1.2, Enum.EasingStyle.Sine)
+	if on and not savedNight then
+		local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere")
+		savedNight = {
+			light = snapshot(Lighting, NIGHT_LIGHT),
+			atmosphere = if atmosphere then snapshot(atmosphere, NIGHT_ATMOSPHERE) else {},
+			target = atmosphere,
+		}
+		TweenService:Create(Lighting, info, NIGHT_LIGHT):Play()
+		if atmosphere then
+			TweenService:Create(atmosphere, info, NIGHT_ATMOSPHERE):Play()
+		end
+	elseif not on and savedNight then
+		local saved = savedNight
+		savedNight = nil
+		TweenService:Create(Lighting, info, saved.light):Play()
+		if saved.target and saved.target.Parent then
+			TweenService:Create(saved.target, info, saved.atmosphere):Play()
+		end
+	end
+end
+
+-- Al terminar, espera a que el servidor lo devuelva al lobby (o a que reaparezca si perdió).
+local function endArenaNight()
+	nightToken += 1
+	local token = nightToken
+	task.delay(END_RETURN_DELAY, function()
+		if token == nightToken then
+			setArenaNight(false)
+		end
+	end)
+end
+
 -- ── Notificaciones ──
 
 local function notify(options: { [string]: any })
@@ -292,6 +358,7 @@ local function onStateChanged(payload: any)
 		h.myName.Text = localPlayer.DisplayName
 		h.foeName.Text = foeName
 		h.top.Visible = true
+		setArenaNight(true)
 		startCountdown(if typeof(payload.Seconds) == "number" then payload.Seconds else 3, hudToken)
 	elseif state == "Fight" then
 		hudToken += 1
@@ -308,6 +375,7 @@ local function onStateChanged(payload: any)
 	elseif state == "End" then
 		hudToken += 1
 		showResult(payload.Winner, payload.Reason, foePlayer, hudToken)
+		endArenaNight()
 	end
 end
 
