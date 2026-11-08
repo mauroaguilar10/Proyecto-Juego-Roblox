@@ -6,7 +6,7 @@
 	Flujo:
 	  1. Cliente A → "DuelRequest"(B)            → servidor valida y envía "DuelInvite"(A) a B
 	  2. Cliente B → "DuelResponse"(A, accepted) → si acepta, empieza el duelo
-	  3. Arena generada por código (una por duelo) → "Countdown" → "Fight" → "End"
+	  3. Coliseo generado por código, uno por duelo (Util/ArenaBuilder) → "Countdown" → "Fight" → "End"
 	  Fin: muerte (Defeat), salida del juego / reset del personaje (Forfeit) o tiempo (Timeout = empate).
 	Revancha: si A desafía a B mientras B tiene un desafío pendiente de A, el duelo empieza directo.
 
@@ -18,6 +18,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Remotes = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Remotes"))
+local ArenaBuilder = require(script.Parent:WaitForChild("Util"):WaitForChild("ArenaBuilder"))
 
 type DuelPhase = "Countdown" | "Fighting" | "Ended"
 type EndReason = "Defeat" | "Forfeit" | "Timeout"
@@ -53,9 +54,7 @@ local DUEL_TIMEOUT = 120
 local END_RETURN_DELAY = 2.5
 
 local ARENA_ORIGIN = Vector3.new(0, 1000, 0)
-local ARENA_SPACING = 200
-local ARENA_SIZE = 60
-local WALL_HEIGHT = 20
+local ARENA_SPACING = 200 -- el coliseo mide ~110 studs de diámetro
 
 -- ── Estado ──
 local duelsByPlayer: { [Player]: Duel } = {}
@@ -123,39 +122,10 @@ local function allocateSlot(): number
 	return slot
 end
 
+-- Coliseo (ver Util/ArenaBuilder). spawns[1] = puerta roja (retador), spawns[2] = puerta azul.
 local function buildArena(slot: number): (Model, { CFrame })
 	local origin = ARENA_ORIGIN + Vector3.new(slot * ARENA_SPACING, 0, 0)
-	local half = ARENA_SIZE / 2
-
-	local model = Instance.new("Model")
-	model.Name = `DuelArena_{slot}`
-
-	local function addPart(name: string, size: Vector3, position: Vector3, transparency: number)
-		local part = Instance.new("Part")
-		part.Name = name
-		part.Anchored = true
-		part.Size = size
-		part.CFrame = CFrame.new(position)
-		part.Transparency = transparency
-		part.Material = Enum.Material.Slate
-		part.Color = Color3.fromRGB(70, 70, 80)
-		part.TopSurface = Enum.SurfaceType.Smooth
-		part.Parent = model
-	end
-
-	addPart("Floor", Vector3.new(ARENA_SIZE, 1, ARENA_SIZE), origin, 0)
-	local wallY = WALL_HEIGHT / 2
-	addPart("WallN", Vector3.new(ARENA_SIZE, WALL_HEIGHT, 1), origin + Vector3.new(0, wallY, -half), 0.7)
-	addPart("WallS", Vector3.new(ARENA_SIZE, WALL_HEIGHT, 1), origin + Vector3.new(0, wallY, half), 0.7)
-	addPart("WallE", Vector3.new(1, WALL_HEIGHT, ARENA_SIZE), origin + Vector3.new(half, wallY, 0), 0.7)
-	addPart("WallW", Vector3.new(1, WALL_HEIGHT, ARENA_SIZE), origin + Vector3.new(-half, wallY, 0), 0.7)
-
-	model.Parent = workspace
-
-	local center = origin + Vector3.new(0, 3, 0)
-	local spawnA = origin + Vector3.new(0, 3, -ARENA_SIZE * 0.35)
-	local spawnB = origin + Vector3.new(0, 3, ARENA_SIZE * 0.35)
-	return model, { CFrame.lookAt(spawnA, center), CFrame.lookAt(spawnB, center) }
+	return ArenaBuilder.Build(origin, `DuelArena_{slot}`)
 end
 
 -- ── Ciclo del duelo ──
