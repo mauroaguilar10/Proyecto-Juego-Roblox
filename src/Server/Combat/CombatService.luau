@@ -5,7 +5,9 @@
 
 	════ Máquina de estados (Humanoid.CombatState, jugadores) ════
 
-	  Idle ──clic──► Windup ──WindupTime──► Attacking ──0,1 s──► Recovery ──► Idle
+	  Idle ──clic──► Attacking (golpe instantáneo) ──0,1 s──► Recovery ──► Idle
+	  (El estado Windup ya no se usa al atacar: el daño sale en el mismo clic y el ritmo lo
+	  marcan AttackCooldown + RecoveryTime. WindupTime solo queda para la animación.)
 	   │  ▲            │ (golpeado: Stunned, salvo hyperarmor)        (corta si conectó)
 	   │  └────────────┴──────────────────────────────────────────────────────┘
 	   ├──F──► Parrying ──0,22 s──► Blocking (mientras se mantenga F)
@@ -693,6 +695,12 @@ local function resolveHit(attacker: Fighter, ctx: AttackContext, targetHumanoid:
 	if not targetPlayer then
 		-- Contrato: LastAttacker se escribe ANTES del daño para que DungeonService lo lea en Died.
 		targetHumanoid:SetAttribute("LastAttacker", attacker.player.UserId)
+		-- Potenciador "Daño x2" (Player.DamageBoostUntil, lo escribe DataService de Economía):
+		-- duplica el daño contra enemigos (no contra jugadores).
+		local boost = attacker.player:GetAttribute("DamageBoostUntil")
+		if typeof(boost) == "number" and boost > workspace:GetServerTimeNow() then
+			damage *= 2
+		end
 	end
 
 	local healthBefore = targetHumanoid.Health
@@ -806,17 +814,15 @@ local function onAttack(player: Player, aim: unknown)
 		weapon = weapon,
 		combo = fighter.combo,
 		direction = attackDirection(root, aim),
-		strikeAt = now + weapon.WindupTime,
+		strikeAt = now,
 		landed = false,
 	}
 	fighter.attack = ctx
 	humanoid:SetAttribute("ComboStep", ctx.combo)
 
-	enterState(fighter, "Windup", weapon.WindupTime, function()
-		if fighter.attack == ctx then
-			strike(fighter, ctx)
-		end
-	end)
+	-- Golpe instantáneo: sin Windup, el hitbox sale en el mismo clic. El ritmo lo marca
+	-- AttackCooldown (arriba) + Recovery. WindupTime solo se usa para la animación del cliente.
+	strike(fighter, ctx)
 end
 
 -- ══════════════════ Guardia y dash ══════════════════

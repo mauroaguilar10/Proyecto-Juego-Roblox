@@ -10,6 +10,7 @@ local Remotes = require(Shared:WaitForChild("Remotes") :: ModuleScript)
 local WeaponData = require(Shared:WaitForChild("WeaponData") :: ModuleScript)
 local Preview = require(script.Parent:WaitForChild("Util"):WaitForChild("WeaponPreview"))
 local Sounds = require(script.Parent:WaitForChild("Util"):WaitForChild("Sounds"))
+local Signals = require(script.Parent:WaitForChild("Util"):WaitForChild("Signals"))
 local UIController = {}
 
 local ink = Color3.fromRGB(15, 19, 26)
@@ -559,6 +560,8 @@ function UIController:Init()
 				action = if available then "Ver pase" else "Pase pendiente"
 			elseif w.Acquisition == "Gold" then
 				action = "Comprar · " .. tostring(w.Price) .. " oro"
+			elseif w.Acquisition == "Robux" then
+				action = "Tienda (Robux)"
 			else
 				action = "Obtener"
 			end
@@ -585,6 +588,7 @@ function UIController:Init()
 		end
 	end
 
+	local show: (boolean) -> () -- se define más abajo; las fichas la usan para cerrar la tienda
 	local ids = {}
 	for id in WeaponData.Weapons do table.insert(ids, id) end
 	-- Orden: el arma inicial, después las de oro de la más barata a la más cara, y al final las de pase.
@@ -593,8 +597,9 @@ function UIController:Init()
 		if a == WeaponData.DEFAULT_WEAPON then return true end
 		if b == WeaponData.DEFAULT_WEAPON then return false end
 		local wa, wb = WeaponData.Weapons[a], WeaponData.Weapons[b]
-		local pa, pb = wa.Acquisition == "GamePass", wb.Acquisition == "GamePass"
-		if pa ~= pb then return pb end
+		local rank = { Free = 0, Gold = 1, Robux = 2, GamePass = 3 }
+		local ra, rb = rank[wa.Acquisition] or 1, rank[wb.Acquisition] or 1
+		if ra ~= rb then return ra < rb end
 		if wa.Price ~= wb.Price then return wa.Price < wb.Price end
 		return a < b
 	end)
@@ -620,6 +625,11 @@ function UIController:Init()
 				Remotes.GetEvent("EquipWeapon"):FireServer(id)
 				return
 			end
+			if w.Acquisition == "Robux" then
+				show(false)
+				Signals.OpenPremiumShop:Fire("Armas")
+				return
+			end
 			local ok, bought, reason = pcall(function()
 				return Remotes.GetFunction("PurchaseWeapon"):InvokeServer(id)
 			end)
@@ -638,7 +648,7 @@ function UIController:Init()
 		Sounds.Play("Compra")
 		task.delay(1, refresh)
 	end)
-	local function show(open: boolean)
+	show = function(open: boolean)
 		panel.Visible, shade.Visible = open, open
 		shopOpen = open
 		updatePassButton()

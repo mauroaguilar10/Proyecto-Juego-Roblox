@@ -37,6 +37,8 @@ local Util = script.Parent:WaitForChild("Util")
 local CombatAnimations = require(Util:WaitForChild("CombatAnimations"))
 local CombatEffects = require(Util:WaitForChild("CombatEffects"))
 local CombatVisuals = require(Util:WaitForChild("CombatVisuals"))
+local CombatStyles = require(Util:WaitForChild("CombatStyles"))
+local CombatFx = require(Util:WaitForChild("CombatFx"))
 
 -- Mantener iguales a CombatService (el servidor valida con sus propios valores).
 local COMBO_LENGTH = 3
@@ -271,13 +273,30 @@ local function onCombatState(player: Player, character: Model, humanoid: Humanoi
 		CombatVisuals.SetBrokenPulse(character, false)
 	end
 
+	-- Estilo del arma (CombatStyles): arco de corte, impacto y, en las especiales, animaciones propias.
+	local style = CombatStyles.Get(weapon.Id)
+
 	if state == "Windup" then
-		CombatAnimations.PlayWindup(character, combo, weapon.WindupTime)
+		CombatAnimations.PlayWindup(character, combo, weapon.WindupTime, if style.windup then style.windup[combo] else nil)
 		CombatVisuals.WindupGlint(character, weapon.Weight == "Heavy")
+		if style.special then
+			CombatFx.Charge(character, style, weapon.WindupTime)
+		end
 	elseif state == "Attacking" then
-		CombatAnimations.PlaySlash(character, combo, weapon.Weight)
-		CombatVisuals.SlashTrail(character, TRAIL_COLORS[combo] or TRAIL_COLORS[1], SLASH_TRAIL_TIME)
+		CombatAnimations.PlaySlash(character, combo, weapon.Weight, if style.slash then style.slash[combo] else nil,
+			if style.windup then style.windup[combo] else nil)
+		CombatVisuals.SlashTrail(character, if style.special then style.color else TRAIL_COLORS[combo] or TRAIL_COLORS[1], SLASH_TRAIL_TIME)
 		CombatEffects.PlaySound(if combo == COMBO_LENGTH then "Heavy" else "Swing", humanoid.RootPart)
+		local root = humanoid.RootPart
+		if root then
+			if style.special then
+				CombatFx.Charge(character, style, 0.12)
+			end
+			CombatFx.SlashArc(root, style, style.sweeps[combo] or "V", weapon.Range)
+			if combo == COMBO_LENGTH and style.finisher then
+				task.delay(0.08, CombatFx.Finisher, character, style)
+			end
+		end
 	elseif state == "Parrying" then
 		CombatAnimations.SetMode(character, "Parry")
 		CombatVisuals.ParryWindow(character, PARRY_WINDOW)
@@ -416,6 +435,9 @@ local function onFeedback(payload: any)
 		CombatEffects.Flash(target, colors.Hit)
 		if targetRoot then
 			CombatVisuals.HitSpark(targetRoot.Position + Vector3.new(0, 0.5, 0), colors.Hit, if finisher then 18 else 10)
+			-- Estallido grande con el estilo del arma del atacante (enemigos: estilo por defecto).
+			local style = CombatStyles.Get(if attackerPlayer then weaponOf(attackerPlayer).Id else nil)
+			CombatFx.Impact(targetRoot.Position + Vector3.new(0, 0.5, 0), style, finisher or payload.Killed == true)
 		end
 		CombatEffects.Popup(target, `-{damage}`, if finisher then colors.Finisher else colors.Damage, finisher or payload.Killed == true)
 		CombatEffects.PlaySound(if finisher then "Heavy" else "Hit", targetRoot)

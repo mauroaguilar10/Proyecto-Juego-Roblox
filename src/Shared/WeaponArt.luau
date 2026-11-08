@@ -329,7 +329,112 @@ local function voidScythe(b: Builder)
 	end
 end
 
+-- Estela al mover el arma, entre dos partes (base y punta).
+local function trail(from: BasePart, to: BasePart, colors: ColorSequence, lifetime: number)
+	local a0 = Instance.new("Attachment")
+	a0.Name = "EstelaBase"
+	a0.Parent = from
+	local a1 = Instance.new("Attachment")
+	a1.Name = "EstelaPunta"
+	a1.Parent = to
+	local t = Instance.new("Trail")
+	t.Attachment0, t.Attachment1 = a0, a1
+	t.Color = colors
+	t.Transparency = NumberSequence.new(0.1, 1)
+	t.LightEmission = 1
+	t.Lifetime = lifetime
+	t.MinLength = 0.05
+	t.FaceCamera = true
+	t.Parent = from
+end
+
+-- ── Hoja del Fénix (Robux): espada de llamas vivas ──
+local function phoenixBlade(b: Builder)
+	local gold = Color3.fromRGB(236, 182, 72)
+	local deepRed = Color3.fromRGB(110, 22, 18)
+	local flame = Color3.fromRGB(255, 120, 30)
+	local bright = Color3.fromRGB(255, 220, 110)
+	local core = Color3.fromRGB(226, 150, 64)
+	b.rod("Empuñadura", 1.2, 0.23, CFrame.new(0, 0, 0), deepRed, Enum.Material.Fabric)
+	for i = 0, 4 do
+		b.rod("Hilo", 0.05, 0.26, CFrame.new(0, -0.48 + i * 0.24, 0), gold, Enum.Material.Foil)
+	end
+	b.ball("Pomo", 0.42, CFrame.new(0, -0.74, 0), gold, Enum.Material.Foil)
+	b.ball("GemaFuego", 0.24, CFrame.new(0.14, -0.74, 0), flame, Enum.Material.Neon)
+	-- Guarda con alas de fénix: plumas doradas con puntas encendidas.
+	b.add("Guarda", Vector3.new(0.34, 0.26, 0.6), CFrame.new(0, 0.72, 0), gold, Enum.Material.Foil)
+	b.ball("Corazon", 0.26, CFrame.new(0, 0.72, 0) * CFrame.new(0.15, 0, 0), flame, Enum.Material.Neon)
+	for _, side in { -1, 1 } do
+		for i = 0, 2 do
+			local angle = math.rad(15 + i * 22)
+			b.add("Pluma", Vector3.new(0.08, 0.14, 0.62 - i * 0.12), CFrame.new(0, 0.78 + i * 0.12, side * (0.5 + i * 0.06)) * CFrame.Angles(side * -angle, 0, 0),
+				if i == 2 then flame else gold, if i == 2 then Enum.Material.Neon else Enum.Material.Foil)
+		end
+	end
+	-- Hoja: núcleo dorado con canal de fuego y filos incandescentes.
+	local length, width = 4, 0.5
+	local y = 0.85 + length / 2
+	local blade = b.add("Hoja", Vector3.new(0.08, length, width), CFrame.new(0, y, 0), core, Enum.Material.Metal)
+	b.add("Canal", Vector3.new(0.1, length * 0.85, 0.12), CFrame.new(0, 0.95 + length * 0.425, 0), flame, Enum.Material.Neon)
+	for _, side in { -1, 1 } do
+		b.add("Filo", Vector3.new(0.09, length, 0.05), CFrame.new(0, y, side * (width / 2 - 0.02)), bright, Enum.Material.Neon)
+	end
+	b.tip(CFrame.new(0, 0.85 + length, 0), width, 0.85, 0.08, core, Enum.Material.Metal)
+	local point = b.ball("Chispa", 0.12, CFrame.new(0, 0.85 + length + 0.7, 0), bright, Enum.Material.Neon)
+	local base = b.ball("Base", 0.1, CFrame.new(0, 1, 0), flame, Enum.Material.Neon)
+	-- Fuego, brasas, luz y estela.
+	local fire = Instance.new("Fire")
+	fire.Size, fire.Heat = 2.5, 7
+	fire.Color, fire.SecondaryColor = flame, bright
+	fire.Parent = blade
+	glow(blade, flame, 11, 1.8)
+	particles(blade, ColorSequence.new(bright, flame), 14, 0.16, 1, 3)
+	trail(base, point, ColorSequence.new(bright, Color3.fromRGB(200, 30, 10)), 0.3)
+end
+
+-- ── Martillo del Trueno (Robux): martillo de guerra cargado de rayos ──
+local function stormHammer(b: Builder)
+	local steel = Color3.fromRGB(150, 168, 198)
+	local dark = Color3.fromRGB(46, 52, 68)
+	local gold = Color3.fromRGB(222, 180, 92)
+	local bolt = Color3.fromRGB(120, 225, 255)
+	b.rod("Mango", 4.6, 0.24, CFrame.new(0, 1.5, 0), dark, Enum.Material.Metal)
+	b.rod("Cuero", 1.1, 0.29, CFrame.new(0, -0.1, 0), Color3.fromRGB(60, 40, 30), Enum.Material.Fabric)
+	for _, y in { -0.75, 0.55, 2.2, 3.3 } do
+		b.rod("Anillo", 0.12, 0.31, CFrame.new(0, y, 0), gold, Enum.Material.Foil)
+	end
+	for i = 0, 5 do
+		b.add("Runa", Vector3.new(0.27, 0.16, 0.04), CFrame.new(0, 0.9 + i * 0.22, 0) * CFrame.Angles(0, i * math.rad(60), math.rad(if i % 2 == 0 then 30 else -30)),
+			bolt, Enum.Material.Neon)
+	end
+	b.ball("Pomo", 0.4, CFrame.new(0, -0.85, 0), gold, Enum.Material.Foil)
+	-- Cabeza: bloque de acero tormenta con caras redondas doradas y rayos en ambos lados.
+	local y = 4.05
+	local head = b.add("Cabeza", Vector3.new(0.95, 1.05, 2), CFrame.new(0, y, 0), steel, Enum.Material.Metal)
+	b.add("Faja", Vector3.new(1.0, 0.18, 2.04), CFrame.new(0, y, 0), gold, Enum.Material.Foil)
+	local faces = {}
+	for _, side in { -1, 1 } do
+		local cap = b.add("Cara", Vector3.new(0.28, 1.2, 1.2), CFrame.new(0, y, side * 1.08) * CFrame.Angles(0, math.rad(90), 0), gold, Enum.Material.Foil)
+		;(cap :: Part).Shape = Enum.PartType.Cylinder
+		table.insert(faces, cap)
+		local disc = b.add("Disco", Vector3.new(0.3, 0.7, 0.7), CFrame.new(0, y, side * 1.1) * CFrame.Angles(0, math.rad(90), 0), bolt, Enum.Material.Neon)
+		;(disc :: Part).Shape = Enum.PartType.Cylinder
+		-- Rayo en zigzag sobre cada lado plano de la cabeza.
+		for i, seg in { { 0.25, 30 }, { 0, -30 }, { -0.25, 30 } } do
+			b.add("Rayo", Vector3.new(0.04, 0.32, 0.09), CFrame.new(side * 0.49, y + seg[1], (i - 2) * 0.12) * CFrame.Angles(math.rad(seg[2]), 0, 0), bolt, Enum.Material.Neon)
+		end
+	end
+	b.tip(CFrame.new(0, y + 0.52, 0), 0.5, 0.55, 0.3, gold, Enum.Material.Foil)
+	glow(head, bolt, 11, 1.8)
+	particles(head, ColorSequence.new(Color3.new(1, 1, 1), bolt), 16, 0.14, 2.5, 0)
+	if faces[1] and faces[2] then
+		trail(faces[1], faces[2], ColorSequence.new(Color3.new(1, 1, 1), bolt), 0.25)
+	end
+end
+
 local BUILDERS: { [string]: (Builder) -> () } = {
+	PhoenixBlade = phoenixBlade,
+	StormHammer = stormHammer,
 	WoodenSword = woodenSword,
 	IronBlade = ironBlade,
 	VoidScythe = voidScythe,

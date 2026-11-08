@@ -17,7 +17,8 @@
 	El Attribute `Player.EquippedWeapon` SIEMPRE contiene una clave válida de `Weapons`.
 ]]
 
-export type AcquisitionType = "Free" | "Gold" | "GamePass"
+-- "Robux": producto de desarrollador de la tienda de Robux (Shared/StoreData, WeaponId = Id).
+export type AcquisitionType = "Free" | "Gold" | "GamePass" | "Robux"
 
 -- Light: rápida, poca inercia. Heavy: lenta, mucho compromiso, hyperarmor al final del windup.
 export type WeaponWeight = "Light" | "Medium" | "Heavy"
@@ -133,6 +134,44 @@ local Weapons: { [string]: WeaponStats } = {
 		RecoveryTime = 0.65,
 		PostureDamage = 40,
 		StepForwardForce = 26,
+	},
+
+	-- Armas de la tienda de Robux (modelo en Shared/WeaponArt, con efectos).
+	PhoenixBlade = {
+		Id = "PhoenixBlade",
+		DisplayName = "Hoja del Fénix",
+		Damage = 34,
+		AttackCooldown = 0.7,
+		Range = 8,
+		Acquisition = "Robux",
+		Price = 0,
+		DropChance = 0,
+		GamePassId = nil,
+
+		Weight = "Medium",
+		WindupTime = 0.26,
+		RecoveryTime = 0.4,
+		PostureDamage = 28,
+		StepForwardForce = 20,
+	},
+
+	StormHammer = {
+		Id = "StormHammer",
+		DisplayName = "Martillo del Trueno",
+		Damage = 58,
+		AttackCooldown = 1.25,
+		Range = 7.5,
+		Acquisition = "Robux",
+		Price = 0,
+		DropChance = 0,
+		GamePassId = nil,
+
+		-- Martillo: el golpe más pesado del juego; rompe guardias con facilidad.
+		Weight = "Heavy",
+		WindupTime = 0.55,
+		RecoveryTime = 0.7,
+		PostureDamage = 48,
+		StepForwardForce = 28,
 	},
 
 	-- Arma del Pase del Vacío (el pase además duplica el oro de la mazmorra: ver DataService).
